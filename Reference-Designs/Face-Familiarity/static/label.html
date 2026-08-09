@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Face Library</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:system-ui,sans-serif;background:#111;color:#eee;height:100vh;display:flex;flex-direction:column}
+  a{color:#3b82f6;text-decoration:none}
+  header{padding:14px 20px;background:#1a1a1a;border-bottom:1px solid #2a2a2a;display:flex;align-items:center;gap:14px;flex-shrink:0}
+  header h1{font-size:17px;font-weight:600;white-space:nowrap}
+  header .nav{margin-left:auto;font-size:13px}
+  #ingest-bar{display:flex;gap:8px;padding:10px 20px;background:#161616;border-bottom:1px solid #222;align-items:center;flex-shrink:0}
+  #ingest-bar input[type=text]{flex:1;padding:8px 12px;border-radius:8px;border:1px solid #3a3a3a;background:#222;color:#eee;font-size:13px;outline:none}
+  #ingest-bar input[type=text]:focus{border-color:#555}
+  button{padding:8px 14px;border-radius:8px;border:1px solid #3a3a3a;background:#252525;color:#eee;font-size:13px;cursor:pointer}
+  button:hover{background:#2e2e2e}
+  button:disabled{opacity:.5;cursor:default}
+  button.primary{background:#1d3a5f;border-color:#2563eb;color:#93c5fd}
+  button.primary:hover{background:#234a78}
+  #ingest-status{font-size:12px;color:#888;min-width:160px}
+  main{display:flex;flex:1;overflow:hidden}
+  #people{width:230px;border-right:1px solid #222;overflow-y:auto;flex-shrink:0;background:#151515}
+  .person-row{padding:11px 16px;cursor:pointer;border-bottom:1px solid #1e1e1e;display:flex;justify-content:space-between;align-items:center;font-size:13px}
+  .person-row:hover{background:#1c1c1c}
+  .person-row.active{background:#1a2030;border-left:3px solid #3b82f6}
+  .person-row.drag-over{outline:2px dashed #3b82f6;outline-offset:-2px;background:#1a2030}
+  .person-row .pname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .person-row .count{color:#666;font-size:11px}
+  .person-row .row-actions{display:flex;align-items:center;gap:2px;flex-shrink:0}
+  .icon-btn{padding:2px 5px;font-size:12px;border:none;background:transparent;color:#777;border-radius:4px;line-height:1.4}
+  .icon-btn:hover{background:#2a2a2a;color:#eee}
+  #new-person-row{padding:10px 16px;border-bottom:1px solid #222;display:flex;gap:6px}
+  #new-person-row input{flex:1;min-width:0;padding:6px 8px;border-radius:6px;border:1px solid #3a3a3a;background:#222;color:#eee;font-size:12px}
+  #view-toggle{display:none;align-items:center;gap:8px;padding:10px 16px;border-bottom:1px solid #1e1e1e;background:#141414;flex-shrink:0}
+  #view-toggle.open{display:flex}
+  #view-toggle .seg{display:flex;border:1px solid #3a3a3a;border-radius:8px;overflow:hidden}
+  #view-toggle .seg button{border:none;border-radius:0;background:#1c1c1c}
+  #view-toggle .seg button.active{background:#1d3a5f;color:#93c5fd}
+  #view-toggle input[type=number]{width:70px;padding:6px 8px;border-radius:6px;border:1px solid #3a3a3a;background:#222;color:#eee;font-size:12px}
+  #group-summary{font-size:12px;color:#777;margin-left:auto}
+  #grid-wrap{flex:1;overflow-y:auto;padding:16px}
+  #person-grid-toggle{display:none}
+  #person-grid-toggle.open{display:block;margin-bottom:14px}
+  #person-grid-toggle button{font-size:12px;color:#999;background:#171717;border:1px solid #262626}
+  #grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px}
+  #grid.collapsed{display:none}
+  #groups{display:flex;flex-direction:column;gap:10px}
+  .group-card{background:#171717;border:1px solid #262626;border-radius:10px;overflow:hidden}
+  .group-head{display:flex;align-items:center;gap:12px;padding:10px 12px}
+  .group-head img{width:56px;height:56px;object-fit:cover;border-radius:6px;background:#000;flex-shrink:0}
+  .group-head .info{flex:1;font-size:13px;color:#ccc}
+  .group-head .info b{color:#fff}
+  .group-members{display:none;grid-template-columns:repeat(auto-fill,minmax(80px,1fr));gap:6px;padding:0 12px 12px}
+  .group-members.open{display:grid}
+  .group-members .card img{aspect-ratio:1}
+  .card{position:relative;background:#1a1a1a;border:2px solid transparent;border-radius:8px;overflow:hidden;cursor:grab}
+  .card:active{cursor:grabbing}
+  .card.selected{border-color:#3b82f6}
+  .card img{width:100%;aspect-ratio:1;object-fit:cover;display:block;background:#000}
+  .card .meta{font-size:10px;color:#888;padding:4px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .card .similar-btn{position:absolute;top:4px;right:4px;width:22px;height:22px;border-radius:50%;background:rgba(0,0,0,.6);border:1px solid #444;color:#ddd;font-size:13px;line-height:1;display:flex;align-items:center;justify-content:center;cursor:pointer}
+  .card .similar-btn:hover{background:rgba(0,0,0,.85)}
+  .empty{padding:40px 20px;text-align:center;color:#444;font-size:14px;grid-column:1/-1}
+  #similar-panel{width:280px;border-left:1px solid #222;overflow-y:auto;flex-shrink:0;background:#151515;display:none;flex-direction:column}
+  #similar-panel.open{display:flex}
+  #similar-header{padding:12px 14px;border-bottom:1px solid #222;display:flex;justify-content:space-between;align-items:center;font-size:12px;color:#999}
+  #similar-list{overflow-y:auto;padding:10px;display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:8px}
+  #similar-list .card{font-size:10px}
+  .sim{position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,.6);color:#93c5fd;font-size:10px;padding:2px 4px;text-align:center}
+  #person-suggestions{margin-top:22px}
+  #person-suggestions.hidden{display:none}
+  #person-suggestions h3{font-size:13px;color:#999;font-weight:500;margin-bottom:10px}
+  #suggestions-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px}
+  #toolbar{position:sticky;bottom:0;background:#1a1a1a;border-top:1px solid #2a2a2a;padding:10px 20px;display:none;gap:10px;align-items:center;flex-shrink:0}
+  #toolbar.open{display:flex}
+  #toolbar select,#toolbar input[type=text]{padding:7px 10px;border-radius:8px;border:1px solid #3a3a3a;background:#222;color:#eee;font-size:13px}
+  #sel-count{font-size:13px;color:#ccc;white-space:nowrap}
+</style>
+</head>
+<body>
+<header>
+  <h1>Face Library</h1>
+  <span class="nav"><a href="/review">Score a video &rarr;</a></span>
+</header>
+<div id="ingest-bar">
+  <input id="ingest-source" type="text" placeholder="YouTube URL or local video path to ingest...">
+  <button class="primary" id="ingest-btn" onclick="startIngest()">Ingest</button>
+  <span id="ingest-status"></span>
+  <button id="resolve-dupes-btn" onclick="resolveDuplicates()" title="Auto-assign unassigned faces that are exact duplicates of an already-labeled face">Resolve exact duplicates</button>
+  <span id="dupes-status"></span>
+</div>
+<main>
+  <div id="people">
+    <div class="person-row active" data-filter="unassigned" onclick="selectFilter('unassigned')"
+         ondragover="onPersonDragOver(event)" ondragleave="onPersonDragLeave(event)" ondrop="onPersonDrop(event, null)">
+      <span>Unassigned</span><span class="count" id="count-unassigned"></span>
+    </div>
+    <div class="person-row" data-filter="all" onclick="selectFilter('all')">
+      <span>All faces</span><span class="count" id="count-all"></span>
+    </div>
+    <div id="new-person-row">
+      <input id="new-person-name" type="text" placeholder="New person name">
+      <button onclick="createPerson()">+</button>
+    </div>
+    <div id="people-list"></div>
+  </div>
+  <div id="grid-wrap">
+    <div id="view-toggle">
+      <div class="seg">
+        <button id="view-faces-btn" class="active" onclick="setViewMode('faces')">Faces</button>
+        <button id="view-groups-btn" onclick="setViewMode('groups')">Suggested groups</button>
+      </div>
+      <label style="font-size:12px;color:#999">min similarity <input id="cluster-threshold" type="number" step="0.01" min="0" max="1" value="0.40"></label>
+      <button onclick="loadGroups()">Regroup</button>
+      <span id="group-summary"></span>
+    </div>
+    <div id="person-grid-toggle" class="hidden"></div>
+    <div id="grid"><div class="empty">Loading...</div></div>
+    <div id="groups" style="display:none"></div>
+    <div id="person-suggestions" class="hidden"></div>
+  </div>
+  <div id="similar-panel">
+    <div id="similar-header">
+      <span id="similar-title">Similar faces</span>
+      <button onclick="closeSimilar()">&times;</button>
+    </div>
+    <div id="similar-list"></div>
+  </div>
+</main>
+<div id="toolbar">
+  <span id="sel-count"></span>
+  <select id="assign-select"></select>
+  <button class="primary" onclick="assignSelected()">Assign</button>
+  <button onclick="unassignSelected()">Unassign</button>
+  <button onclick="clearSelection()">Clear</button>
+</div>
+<script>
+let people = [];
+let currentFilter = 'unassigned';
+let selected = new Set();
+let similarSourceUuid = null;
+let viewMode = 'faces';
+let personGridCollapsed = true;
+let lastClickedUuid = null;
+
+function esc(s) { return (s ?? '').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+async function loadPeople() {
+  people = await (await fetch('/api/people')).json();
+  const list = document.getElementById('people-list');
+  list.innerHTML = people.map(p => `
+    <div class="person-row" data-filter="${p.uuid}" onclick="selectFilter('${p.uuid}')"
+         ondragover="onPersonDragOver(event)" ondragleave="onPersonDragLeave(event)" ondrop="onPersonDrop(event, '${p.uuid}')">
+      <span class="pname">${esc(p.name)}</span>
+      <span class="row-actions">
+        <span class="count">${p.face_count}</span>
+        <button class="icon-btn" title="Rename" onclick="event.stopPropagation(); renamePerson('${p.uuid}')">&#9998;</button>
+        <button class="icon-btn" title="Delete" onclick="event.stopPropagation(); deletePerson('${p.uuid}')">&times;</button>
+      </span>
+    </div>`).join('');
+  document.getElementById('assign-select').innerHTML =
+    '<option value="">Choose a person...</option>' +
+    people.map(p => `<option value="${p.uuid}">${esc(p.name)}</option>`).join('');
+  highlightFilter();
+}
+
+function highlightFilter() {
+  document.querySelectorAll('.person-row').forEach(el => {
+    el.classList.toggle('active', el.dataset.filter === currentFilter);
+  });
+}
+
+async function selectFilter(filter) {
+  currentFilter = filter;
+  personGridCollapsed = true;
+  highlightFilter();
+  document.getElementById('view-toggle').classList.toggle('open', filter === 'unassigned');
+  if (filter !== 'unassigned' && viewMode === 'groups') await setViewMode('faces');
+  else await refreshView();
+}
+
+async function refreshView() {
+  if (currentFilter === 'unassigned' && viewMode === 'groups') await loadGroups();
+  else await loadFaces();
+}
+
+async function setViewMode(mode) {
+  viewMode = mode;
+  document.getElementById('view-faces-btn').classList.toggle('active', mode === 'faces');
+  document.getElementById('view-groups-btn').classList.toggle('active', mode === 'groups');
+  document.getElementById('grid').style.display = mode === 'faces' ? '' : 'none';
+  document.getElementById('groups').style.display = mode === 'groups' ? '' : 'none';
+  await refreshView();
+}
+
+async function loadFaces() {
+  const res = await fetch('/api/faces?person=' + encodeURIComponent(currentFilter));
+  const faces = await res.json();
+  const grid = document.getElementById('grid');
+  if (!faces.length) {
+    grid.innerHTML = '<div class="empty">No faces here yet.</div>';
+  } else {
+    grid.innerHTML = faces.map(f => renderCard(f)).join('');
+  }
+  updatePersonGridToggle(faces.length);
+  refreshSelectionClasses();
+  refreshCounts(faces.length);
+  await loadPersonSuggestions();
+}
+
+function updatePersonGridToggle(count) {
+  const toggle = document.getElementById('person-grid-toggle');
+  const grid = document.getElementById('grid');
+  const isPerson = currentFilter !== 'unassigned' && currentFilter !== 'all';
+  if (!isPerson) {
+    toggle.classList.remove('open');
+    grid.classList.remove('collapsed');
+    return;
+  }
+  toggle.classList.add('open');
+  grid.classList.toggle('collapsed', personGridCollapsed);
+  toggle.innerHTML = `<button onclick="togglePersonGrid()">${personGridCollapsed ? '▸ Show' : '▾ Hide'} ${count} labeled face(s)</button>`;
+}
+
+function togglePersonGrid() {
+  personGridCollapsed = !personGridCollapsed;
+  const count = document.querySelectorAll('#grid .card').length;
+  updatePersonGridToggle(count);
+}
+
+async function loadPersonSuggestions() {
+  const section = document.getElementById('person-suggestions');
+  const isPerson = currentFilter !== 'unassigned' && currentFilter !== 'all';
+  if (!isPerson) {
+    section.classList.add('hidden');
+    section.innerHTML = '';
+    return;
+  }
+  const person = findPerson(currentFilter);
+  const heading = `Unassigned faces similar to ${esc(person ? person.name : '')} (most similar first)`;
+  section.classList.remove('hidden');
+  section.innerHTML = `<h3>${heading}</h3><div class="empty">Loading...</div>`;
+  const res = await fetch(`/api/people/${currentFilter}/suggestions`);
+  const rows = await res.json();
+  if (!rows.length) {
+    section.innerHTML = `<h3>${heading}</h3><div class="empty">No unassigned faces to compare against yet.</div>`;
+    return;
+  }
+  section.innerHTML = `<h3>${heading}</h3><div id="suggestions-grid">${rows.map(r => `
+    <div class="card" data-uuid="${r.uuid}" draggable="true" ondragstart="onCardDragStart(event, '${r.uuid}')" onclick="toggleSelect('${r.uuid}', event)">
+      <img src="/thumbnail/${encodeURIComponent(r.thumbnail_path)}" loading="lazy">
+      <div class="sim">${(r.similarity * 100).toFixed(0)}%</div>
+    </div>`).join('')}</div>`;
+  refreshSelectionClasses();
+}
+
+async function loadGroups() {
+  const threshold = parseFloat(document.getElementById('cluster-threshold').value) || 0.40;
+  const groups = document.getElementById('groups');
+  groups.innerHTML = '<div class="empty">Grouping...</div>';
+  const res = await fetch(`/api/faces/clusters?threshold=${threshold}&min_size=3`);
+  const data = await res.json();
+  document.getElementById('group-summary').textContent =
+    `${data.clusters.length} group(s)` +
+    (data.dropped_clusters ? `, ${data.dropped_clusters} smaller group(s) hidden` : '') +
+    `, ${data.singleton_count} face(s) with no group`;
+  if (!data.clusters.length) {
+    groups.innerHTML = '<div class="empty">No groups at this similarity — try lowering min similarity.</div>';
+    refreshCounts(0);
+    return;
+  }
+  groups.innerHTML = data.clusters.map((c, i) => renderGroupCard(c, i)).join('');
+  refreshSelectionClasses();
+  refreshCounts(data.clusters.reduce((n, c) => n + c.size, 0) + data.singleton_count);
+}
+
+function renderGroupCard(c, i) {
+  const members = c.members.map(m => `
+    <div class="card" data-uuid="${m.uuid}" draggable="true" ondragstart="onCardDragStart(event, '${m.uuid}')" onclick="toggleSelect('${m.uuid}', event)">
+      <img src="/thumbnail/${encodeURIComponent(m.thumbnail_path)}" loading="lazy">
+    </div>`).join('');
+  return `
+    <div class="group-card">
+      <div class="group-head">
+        <img src="/thumbnail/${encodeURIComponent(c.representative_thumbnail)}">
+        <div class="info"><b>${c.size} faces</b> likely the same person</div>
+        <button onclick="selectGroup(${i})">Select all ${c.size}</button>
+        <button onclick="toggleGroupPreview(${i})">Preview</button>
+      </div>
+      <div class="group-members" id="group-members-${i}">${members}</div>
+    </div>`;
+}
+
+function toggleGroupPreview(i) {
+  document.getElementById('group-members-' + i).classList.toggle('open');
+}
+
+function selectGroup(i) {
+  document.querySelectorAll(`#group-members-${i} .card`).forEach(el => selected.add(el.dataset.uuid));
+  document.getElementById('group-members-' + i).classList.add('open');
+  refreshSelectionClasses();
+}
+
+async function refreshCounts(currentCount) {
+  if (currentFilter === 'unassigned') document.getElementById('count-unassigned').textContent = currentCount;
+  if (currentFilter === 'all') document.getElementById('count-all').textContent = currentCount;
+}
+
+function renderCard(f) {
+  return `
+    <div class="card" data-uuid="${f.uuid}" draggable="true" ondragstart="onCardDragStart(event, '${f.uuid}')" onclick="toggleSelect('${f.uuid}', event)">
+      <img src="/thumbnail/${encodeURIComponent(f.thumbnail_path)}" loading="lazy">
+      <div class="meta">${esc(f.source)} · ${f.seconds}s</div>
+      <div class="similar-btn" title="Find similar" onclick="event.stopPropagation(); loadSimilar('${f.uuid}')">&asymp;</div>
+    </div>`;
+}
+
+function onCardDragStart(event, uuid) {
+  const uuids = selected.has(uuid) && selected.size ? Array.from(selected) : [uuid];
+  event.dataTransfer.setData('text/plain', JSON.stringify(uuids));
+  event.dataTransfer.effectAllowed = 'move';
+}
+
+function onPersonDragOver(event) {
+  event.preventDefault();
+  event.currentTarget.classList.add('drag-over');
+}
+
+function onPersonDragLeave(event) {
+  event.currentTarget.classList.remove('drag-over');
+}
+
+async function onPersonDrop(event, personUuid) {
+  event.preventDefault();
+  event.currentTarget.classList.remove('drag-over');
+  const raw = event.dataTransfer.getData('text/plain');
+  if (!raw) return;
+  await assignFaces(JSON.parse(raw), personUuid);
+}
+
+function toggleSelect(uuid, event) {
+  const card = event ? event.currentTarget : null;
+  if (event && event.shiftKey && lastClickedUuid && card) {
+    const cards = Array.from(card.parentElement.querySelectorAll(':scope > .card'));
+    const fromIdx = cards.findIndex(el => el.dataset.uuid === lastClickedUuid);
+    const toIdx = cards.findIndex(el => el.dataset.uuid === uuid);
+    if (fromIdx !== -1 && toIdx !== -1) {
+      const [start, end] = fromIdx < toIdx ? [fromIdx, toIdx] : [toIdx, fromIdx];
+      for (let i = start; i <= end; i++) selected.add(cards[i].dataset.uuid);
+      lastClickedUuid = uuid;
+      refreshSelectionClasses();
+      return;
+    }
+  }
+  if (selected.has(uuid)) selected.delete(uuid); else selected.add(uuid);
+  lastClickedUuid = uuid;
+  refreshSelectionClasses();
+}
+
+function refreshSelectionClasses() {
+  document.querySelectorAll('.card').forEach(el => {
+    el.classList.toggle('selected', selected.has(el.dataset.uuid));
+  });
+  const toolbar = document.getElementById('toolbar');
+  const count = document.getElementById('sel-count');
+  if (selected.size) {
+    toolbar.classList.add('open');
+    count.textContent = selected.size + ' selected';
+  } else {
+    toolbar.classList.remove('open');
+  }
+}
+
+function clearSelection() {
+  selected.clear();
+  refreshSelectionClasses();
+}
+
+async function loadSimilar(uuid) {
+  similarSourceUuid = uuid;
+  const panel = document.getElementById('similar-panel');
+  panel.classList.add('open');
+  document.getElementById('similar-title').textContent = 'Similar to this face';
+  const list = document.getElementById('similar-list');
+  list.innerHTML = '<div class="empty">Loading...</div>';
+  const res = await fetch('/api/faces/' + uuid + '/similar');
+  const rows = await res.json();
+  list.innerHTML = rows.slice(0, 40).map(r => `
+    <div class="card" data-uuid="${r.uuid}" draggable="true" ondragstart="onCardDragStart(event, '${r.uuid}')" onclick="toggleSelect('${r.uuid}', event)" style="position:relative">
+      <img src="/thumbnail/${encodeURIComponent(r.thumbnail_path)}" loading="lazy">
+      <div class="sim">${(r.similarity * 100).toFixed(0)}%</div>
+    </div>`).join('');
+  refreshSelectionClasses();
+}
+
+function closeSimilar() {
+  document.getElementById('similar-panel').classList.remove('open');
+  similarSourceUuid = null;
+}
+
+function findPerson(uuid) {
+  return people.find(p => p.uuid === uuid);
+}
+
+async function renamePerson(uuid) {
+  const p = findPerson(uuid);
+  if (!p) return;
+  const name = prompt('Rename person:', p.name);
+  if (!name || !name.trim() || name.trim() === p.name) return;
+  await fetch(`/api/people/${uuid}/rename`, {
+    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name: name.trim() }),
+  });
+  await loadPeople();
+}
+
+async function deletePerson(uuid) {
+  const p = findPerson(uuid);
+  if (!p) return;
+  if (!confirm(`Delete "${p.name}"? Its ${p.face_count} face(s) will go back to Unassigned.`)) return;
+  await fetch(`/api/people/${uuid}/delete`, { method: 'POST' });
+  if (currentFilter === uuid) currentFilter = 'unassigned';
+  await loadPeople();
+  await refreshView();
+}
+
+async function createPerson() {
+  const input = document.getElementById('new-person-name');
+  const name = input.value.trim();
+  if (!name) return;
+  await fetch('/api/people', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name }) });
+  input.value = '';
+  await loadPeople();
+}
+
+async function assignFaces(uuids, personUuid) {
+  if (!uuids.length) return;
+  await fetch('/api/faces/assign', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ face_uuids: uuids, person_uuid: personUuid }),
+  });
+  clearSelection();
+  await loadPeople();
+  await refreshView();
+}
+
+async function assignSelected() {
+  const personUuid = document.getElementById('assign-select').value;
+  if (!personUuid) return;
+  await assignFaces(Array.from(selected), personUuid);
+}
+
+async function unassignSelected() {
+  await assignFaces(Array.from(selected), null);
+}
+
+async function startIngest() {
+  const source = document.getElementById('ingest-source').value.trim();
+  if (!source) return;
+  const btn = document.getElementById('ingest-btn');
+  const status = document.getElementById('ingest-status');
+  btn.disabled = true;
+  status.textContent = 'Starting...';
+  const res = await fetch('/api/ingest', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ source }) });
+  const { job_id } = await res.json();
+  const poll = setInterval(async () => {
+    const job = await (await fetch('/api/jobs/' + job_id)).json();
+    if (job.progress) status.textContent = `Scanning frame ${job.progress.done}/${job.progress.total}...`;
+    if (job.status === 'done') {
+      clearInterval(poll);
+      status.textContent = `Done — ingested ${job.result} face(s).`;
+      btn.disabled = false;
+      await loadPeople();
+      await refreshView();
+    } else if (job.status === 'error') {
+      clearInterval(poll);
+      status.textContent = 'Error: ' + job.error;
+      btn.disabled = false;
+    }
+  }, 1200);
+}
+
+async function resolveDuplicates() {
+  const btn = document.getElementById('resolve-dupes-btn');
+  const status = document.getElementById('dupes-status');
+  btn.disabled = true;
+  status.textContent = 'Resolving...';
+  const res = await fetch('/api/faces/resolve-duplicates', { method: 'POST' });
+  const { resolved } = await res.json();
+  status.textContent = resolved ? `Resolved ${resolved} duplicate(s).` : 'No exact duplicates found.';
+  btn.disabled = false;
+  await loadPeople();
+  await refreshView();
+}
+
+(async function init() {
+  document.getElementById('view-toggle').classList.add('open');
+  await loadPeople();
+  await refreshView();
+})();
+</script>
+</body>
+</html>

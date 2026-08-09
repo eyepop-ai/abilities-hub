@@ -1,0 +1,13 @@
+.env
+__pycache__/
+cache/
+downloads/
+thumbnails/
+reports/
+library.db
+logs/
+.DS_Store
+
+# Bug-reproduction harness and its output artifacts — not part of the project itself.
+test_duplicate_embeddings.py
+bug_two_faces_*

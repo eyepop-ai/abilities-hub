@@ -1,0 +1,5 @@
+eyepop
+python-dotenv
+opencv-python
+numpy
+yt-dlp
