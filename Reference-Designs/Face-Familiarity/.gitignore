@@ -2,12 +2,9 @@
 __pycache__/
 cache/
 downloads/
-thumbnails/
-reports/
-library.db
+uploads/
 logs/
 .DS_Store
 
-# Bug-reproduction harness and its output artifacts — not part of the project itself.
-test_duplicate_embeddings.py
-bug_two_faces_*
+# Per-dataset storage (library.db, thumbnails, reports per data/<dataset>/ — see dataset.py).
+data/

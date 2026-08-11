@@ -3,9 +3,8 @@
 import sqlite3
 import time
 import uuid
-from pathlib import Path
 
-DB_PATH = Path("library.db")
+import dataset
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS people (
@@ -27,7 +26,10 @@ CREATE TABLE IF NOT EXISTS faces (
 
 
 def connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
+    """Connects to the CURRENT dataset's library.db (dataset.get_current()) —
+    read fresh each call, not cached, so a dataset switch takes effect on the
+    next connect() without needing a restart."""
+    conn = sqlite3.connect(dataset.db_path())
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
     return conn

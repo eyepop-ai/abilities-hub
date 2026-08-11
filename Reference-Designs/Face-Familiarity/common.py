@@ -8,6 +8,7 @@ Used by ingest.py, score.py, and server.py.
 import json
 import os
 import time
+import urllib.request
 from pathlib import Path
 
 import cv2
@@ -16,18 +17,56 @@ from dotenv import load_dotenv
 from eyepop import EyePopSdk
 from eyepop.worker.worker_types import CropForward, InferenceComponent, Pop
 
+from dataset import report_dir, thumbnail_dir  # re-exported: most callers already `from common import ...`
+
 load_dotenv(Path(__file__).parent / ".env", override=True)
 
 API_KEY = os.environ["EYEPOP_API_KEY"]
+EYEPOP_URL = os.getenv("EYEPOP_URL", "https://compute.eyepop.ai")
+
+# /watch (see server.py, static/watch.html) needs the browser to talk to
+# EyePop directly over WebRTC, but the raw API_KEY must never reach client-side
+# JS — anyone who can read the page source could then use it themselves outside
+# this app entirely. mint_eyepop_token() exchanges it server-side for a
+# short-lived bearer token via the SAME endpoint the JS/Python SDKs use
+# internally for API-key auth (confirmed by reading eyepop's own SDK source):
+# POST {EYEPOP_URL}/v1/auth/authenticate with Authorization: Bearer <API_KEY>,
+# no body. Only that token is ever sent to the browser (server.py:
+# /api/eyepop-token); the browser then connects with
+# EyePopSdk.EyePop.workerEndpoint({accessToken: token, ...}) instead of apiKey.
+# Observed expires_in ~78,000s (~22h) on staging — comfortably longer than any
+# real /watch session, so this caches the token and re-mints only once actually
+# close to expiry, and the client never needs its own refresh logic.
+_token_cache = {"access_token": None, "expires_at": 0.0}
+
+
+def mint_eyepop_token() -> str:
+    now = time.time()
+    if _token_cache["access_token"] and _token_cache["expires_at"] > now + 300:
+        return _token_cache["access_token"]
+    req = urllib.request.Request(
+        f"{EYEPOP_URL}/v1/auth/authenticate",
+        headers={"Authorization": f"Bearer {API_KEY}"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req) as resp:
+        data = json.loads(resp.read())
+    _token_cache["access_token"] = data["access_token"]
+    _token_cache["expires_at"] = now + data["expires_in"]
+    return _token_cache["access_token"]
+
 
 SAMPLE_INTERVAL_SECONDS = float(os.getenv("SAMPLE_INTERVAL_SECONDS", "2"))
 FAMILIARITY_THRESHOLD = float(os.getenv("FAMILIARITY_THRESHOLD", "0.45"))
 
+# Shared across all datasets (not per-dataset) — see dataset.py's module
+# docstring for why: these are content-addressed by video id/stem, not by
+# which face library you're currently building.
 DOWNLOAD_DIR = Path("downloads")
-THUMBNAIL_DIR = Path("thumbnails")
+UPLOAD_DIR = Path("uploads")
 FRAME_CACHE_DIR = Path("cache/frames")
 RESULTS_CACHE_DIR = Path("cache/results")
-for _dir in (DOWNLOAD_DIR, THUMBNAIL_DIR, FRAME_CACHE_DIR, RESULTS_CACHE_DIR):
+for _dir in (DOWNLOAD_DIR, UPLOAD_DIR, FRAME_CACHE_DIR, RESULTS_CACHE_DIR):
     _dir.mkdir(parents=True, exist_ok=True)
 
 # Bump this whenever POP's abilities change — it's part of the results-cache key
@@ -120,9 +159,44 @@ def resolve_video(source: str) -> Path:
     return download_youtube(source)
 
 
+def save_uploaded_file(filename: str, data: bytes) -> Path:
+    """Save a dropped/picked file (image OR video — same handling either way,
+    see below) to UPLOAD_DIR, content-addressed by hash so re-uploading the
+    same file is a no-op cache hit (same idea as download_youtube's video-id
+    cache). This is the cross-platform replacement for a native file picker:
+    a browser <input type="file"> or drag-and-drop drop deliberately never
+    exposes a real filesystem path (security), only the file's bytes and
+    name, so ingest_video() needs an actual on-disk path to hand to
+    cv2.VideoCapture — this function is what creates one. Images need no
+    separate code path downstream: cv2.VideoCapture reads a still image as a
+    single-frame capture (fps=25, frame_count=1), so ingest_video() just
+    treats it as a very short video."""
+    import hashlib
+
+    digest = hashlib.sha1(data).hexdigest()[:16]
+    suffix = Path(filename).suffix.lower() or ".jpg"
+    path = UPLOAD_DIR / f"{digest}{suffix}"
+    if not path.exists():
+        path.write_bytes(data)
+    return path
+
+
+def _open_video(video: Path) -> cv2.VideoCapture:
+    """cv2.VideoCapture with the container's rotation metadata applied. Phone
+    videos (e.g. iPhone portrait recordings) are stored in landscape sensor
+    orientation with a rotation flag for players to apply — cv2 does NOT apply
+    it by default, so every frame comes out sideways (confirmed on real iPhone
+    footage: 1920x1080 landscape frames from a video that's actually 1080x1920
+    portrait). CAP_PROP_ORIENTATION_AUTO (OpenCV 4.5+) fixes this at the source
+    for every reader, rather than needing a manual rotation step downstream."""
+    cap = cv2.VideoCapture(str(video))
+    cap.set(cv2.CAP_PROP_ORIENTATION_AUTO, 1)
+    return cap
+
+
 def sample_frame_seconds(video: Path, interval: float) -> list[float]:
     """Evenly spaced timestamps covering the video's duration at `interval` seconds apart."""
-    cap = cv2.VideoCapture(str(video))
+    cap = _open_video(video)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
     cap.release()
@@ -132,7 +206,7 @@ def sample_frame_seconds(video: Path, interval: float) -> list[float]:
 
 
 def grab_frame_jpeg(video: Path, seconds: float) -> bytes | None:
-    cap = cv2.VideoCapture(str(video))
+    cap = _open_video(video)
     cap.set(cv2.CAP_PROP_POS_MSEC, seconds * 1000)
     ok, frame = cap.read()
     cap.release()
@@ -249,8 +323,8 @@ def extract_faces(result: dict) -> list[dict]:
     return [f for f, b in zip(faces, blobs) if b not in dupe_blobs]
 
 
-def _results_cache_path(video: Path) -> Path:
-    return RESULTS_CACHE_DIR / f"{video.stem}_{SAMPLE_INTERVAL_SECONDS}s_{POP_FINGERPRINT}.jsonl"
+def _results_cache_path(video: Path, interval: float) -> Path:
+    return RESULTS_CACHE_DIR / f"{video.stem}_{interval}s_{POP_FINGERPRINT}.jsonl"
 
 
 def _load_cached_results(cache_path: Path) -> dict[float, dict]:
@@ -266,8 +340,11 @@ def _load_cached_results(cache_path: Path) -> dict[float, dict]:
     return cached
 
 
-async def scan_video(video: Path, progress=None, timing=None):
-    """Sample `video` at SAMPLE_INTERVAL_SECONDS and run each frame through POP.
+async def scan_video(video: Path, progress=None, timing=None, interval: float | None = None):
+    """Sample `video` every `interval` seconds (default SAMPLE_INTERVAL_SECONDS —
+    2s is too sparse for short clips, e.g. a 10s phone video would get ~5
+    samples total; pass a smaller interval for those) and run each frame
+    through POP.
 
     Yields (seconds, frame_jpeg, pop_result) for every sampled frame that decoded
     successfully. `progress(done, total)` is called after each frame if given.
@@ -275,14 +352,17 @@ async def scan_video(video: Path, progress=None, timing=None):
     round trip if given (0 for cache hits), to measure wall-clock vs. EyePop-side
     latency.
 
-    EyePop results are cached to RESULTS_CACHE_DIR keyed by video + sample
-    interval + POP_FINGERPRINT (see that constant) — re-scanning the same video
-    needs no EyePop connection at all if every sampled frame is already cached.
+    EyePop results are cached to RESULTS_CACHE_DIR keyed by video + interval +
+    POP_FINGERPRINT (see that constant) — re-scanning the same video at the SAME
+    interval needs no EyePop connection at all if every sampled frame is already
+    cached; a different interval gets its own cache file rather than reusing or
+    invalidating the other one, since the two sample sets don't overlap cleanly.
     Frame jpegs are always re-grabbed locally (cheap, no network) since cropping
     thumbnails needs the actual bytes, not just the cached inference result.
     """
-    seconds_list = sample_frame_seconds(video, SAMPLE_INTERVAL_SECONDS)
-    cache_path = _results_cache_path(video)
+    interval = SAMPLE_INTERVAL_SECONDS if interval is None else interval
+    seconds_list = sample_frame_seconds(video, interval)
+    cache_path = _results_cache_path(video, interval)
     cached_results = _load_cached_results(cache_path)
     missing = [s for s in seconds_list if s not in cached_results]
 

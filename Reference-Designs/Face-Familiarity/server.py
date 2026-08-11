@@ -8,6 +8,7 @@ Face-Familiarity local UI.
 Usage: python3.12 server.py  ->  open http://localhost:8080
 """
 import asyncio
+import base64
 import json
 import os
 import re
@@ -22,10 +23,11 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 import numpy as np
 
+import dataset
 import db
 import ingest
 import score
-from common import THUMBNAIL_DIR, bytes_to_embedding, embedding_to_bytes, similarity_matrix
+from common import EYEPOP_URL, FAMILIARITY_THRESHOLD, bytes_to_embedding, embedding_to_bytes, mint_eyepop_token, save_uploaded_file, similarity_matrix, thumbnail_dir
 
 PORT = int(os.getenv("PORT", "8080"))
 STATIC_DIR = Path(__file__).parent / "static"
@@ -95,6 +97,20 @@ def _similar_faces(face_uuid: str, limit: int = 60) -> list[dict]:
 
 def _face_to_json(row) -> dict:
     return {k: row[k] for k in row.keys() if k != "embedding"}
+
+
+def _people_embeddings() -> list[dict]:
+    """Every labeled person in the current dataset with their raw embeddings, for
+    /watch's client-side nearest-neighbor matching (mirrors score.py's
+    load_person_embeddings, but JSON — the browser has no numpy, just a plain JS
+    loop over these, pre-normalized once client-side on load)."""
+    conn = db.connect()
+    grouped: dict[str, dict] = {}
+    for row in db.labeled_faces(conn):
+        person = grouped.setdefault(row["person_uuid"], {"uuid": row["person_uuid"], "name": row["name"], "embeddings": []})
+        person["embeddings"].append(bytes_to_embedding(row["embedding"]).tolist())
+    conn.close()
+    return list(grouped.values())
 
 
 def _resolve_exact_duplicates() -> int:
@@ -229,6 +245,17 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._respond(200, content_type, path.read_bytes())
 
+    def _serve_watch(self):
+        """Template-injects the EyePop URL/default threshold into watch.html at
+        serve time, rather than shipping them in the static file on disk. The
+        API_KEY itself is deliberately NOT injected here — see
+        common.py:mint_eyepop_token and GET /api/eyepop-token below; the
+        browser gets only a short-lived bearer token, never the long-lived key."""
+        html = (STATIC_DIR / "watch.html").read_text()
+        html = html.replace("__EYEPOP_URL__", json.dumps(EYEPOP_URL))
+        html = html.replace("__FAMILIARITY_THRESHOLD__", json.dumps(FAMILIARITY_THRESHOLD))
+        self._respond(200, "text/html", html.encode())
+
     def _read_json_body(self) -> dict:
         length = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(length) if length else b""
@@ -294,15 +321,25 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_file(STATIC_DIR / "label.html", "text/html")
         elif path == "/review":
             self._serve_file(STATIC_DIR / "review.html", "text/html")
+        elif path == "/watch":
+            self._serve_watch()
+        elif path == "/eyepop.min.js":
+            self._serve_file(STATIC_DIR / "eyepop.min.js", "application/javascript")
+        elif path == "/api/people/embeddings":
+            self._json(200, _people_embeddings())
+        elif path == "/api/eyepop-token":
+            self._json(200, {"access_token": mint_eyepop_token()})
         elif path.startswith("/thumbnail/"):
             name = unquote(path[len("/thumbnail/"):])
-            thumb_path = (THUMBNAIL_DIR / name).resolve()
-            if THUMBNAIL_DIR.resolve() not in thumb_path.parents:
+            thumb_path = (thumbnail_dir() / name).resolve()
+            if thumbnail_dir().resolve() not in thumb_path.parents:
                 self._respond(403, "text/plain", b"Forbidden")
                 return
             self._serve_file(thumb_path, "image/jpeg")
         elif path.startswith("/video/"):
             self._serve_video(Path(unquote(path[len("/video/"):])))
+        elif path == "/api/datasets":
+            self._json(200, {"current": dataset.get_current(), "available": dataset.list_datasets()})
         elif path == "/api/people":
             conn = db.connect()
             people = [dict(r) for r in db.list_people(conn)]
@@ -336,7 +373,13 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         body = self._read_json_body()
 
-        if path == "/api/people":
+        if path == "/api/datasets":
+            slug = dataset.set_current(body["name"])
+            self._json(200, {"current": slug, "available": dataset.list_datasets()})
+        elif path == "/api/upload-file":
+            path_ = save_uploaded_file(body["filename"], base64.b64decode(body["data"]))
+            self._json(200, {"path": str(path_)})
+        elif path == "/api/people":
             conn = db.connect()
             person_uuid = db.create_person(conn, body["name"])
             conn.close()
@@ -362,19 +405,23 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"resolved": _resolve_exact_duplicates()})
         elif path == "/api/ingest":
             source = body["source"]
-            job_id = _start_job(lambda progress, set_partial: ingest.ingest_video(source, progress))
+            interval = body.get("interval")
+            job_id = _start_job(lambda progress, set_partial: ingest.ingest_video(source, progress, interval=interval))
             self._json(200, {"job_id": job_id})
         elif path == "/api/score":
             source = body["source"]
             threshold = body.get("threshold")
+            interval = body.get("interval")
             job_id = _start_job(
                 lambda progress, set_partial: score.score_video(
-                    source, threshold or score.FAMILIARITY_THRESHOLD, progress, set_partial
+                    source, threshold or score.FAMILIARITY_THRESHOLD, progress, set_partial, interval=interval
                 )
             )
             self._json(200, {"job_id": job_id})
         elif path == "/api/score/confirm":
             self._confirm_detection(body)
+        elif path == "/api/faces/capture":
+            self._capture_face(body)
         else:
             self._respond(404, "text/plain", b"Not found")
 
@@ -396,6 +443,31 @@ class Handler(BaseHTTPRequestHandler):
         )
         conn.close()
         self._json(200, {"person_uuid": person_uuid})
+
+    def _capture_face(self, body: dict):
+        """Same idea as _confirm_detection, but for a face captured live by
+        /watch — there's no pre-existing report/thumbnail file on disk (review.html's
+        flow already wrote one during scoring; this one is a fresh crop from the
+        browser's own <video> frame), so the thumbnail JPEG arrives as base64 and
+        gets written to thumbnail_dir() here instead of just referenced by name."""
+        conn = db.connect()
+        person_uuid = body.get("person_uuid")
+        new_name = body.get("new_person_name")
+        if new_name:
+            person_uuid = db.create_person(conn, new_name)
+        thumb_name = f"watch_{db.new_uuid()[:8]}.jpg"
+        (thumbnail_dir() / thumb_name).write_bytes(base64.b64decode(body["thumbnail"]))
+        face_uuid = db.insert_face(
+            conn,
+            source="watch",
+            seconds=0.0,
+            confidence=body.get("confidence", 0.0),
+            thumbnail_path=thumb_name,
+            embedding_blob=embedding_to_bytes(np.array(body["embedding"], dtype=np.float32)),
+            person_uuid=person_uuid,
+        )
+        conn.close()
+        self._json(200, {"uuid": face_uuid, "person_uuid": person_uuid})
 
 
 def _free_port(port: int) -> None:

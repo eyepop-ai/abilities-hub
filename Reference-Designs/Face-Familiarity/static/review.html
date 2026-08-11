@@ -10,6 +10,9 @@
   header{padding:14px 20px;background:#1a1a1a;border-bottom:1px solid #2a2a2a;display:flex;align-items:center;gap:14px;flex-shrink:0}
   header h1{font-size:17px;font-weight:600;white-space:nowrap}
   header .nav{margin-left:auto;font-size:13px}
+  #dataset-switcher{display:flex;align-items:center;gap:6px}
+  #dataset-switcher select{padding:6px 8px;border-radius:6px;border:1px solid #3a3a3a;background:#222;color:#eee;font-size:12px}
+  #dataset-switcher button{padding:5px 9px;font-size:12px}
   #steps{display:flex;gap:6px;padding:10px 20px;background:#161616;border-bottom:1px solid #222;flex-shrink:0}
   .step-chip{font-size:12px;color:#666;padding:4px 10px;border-radius:99px;background:#1c1c1c;border:1px solid #2a2a2a}
   .step-chip.active{color:#93c5fd;background:#1d3a5f;border-color:#2563eb}
@@ -73,7 +76,11 @@
 <body>
 <header>
   <h1>Score a Video</h1>
-  <span class="nav"><a href="/">&larr; Face Library</a></span>
+  <div id="dataset-switcher">
+    <select id="dataset-select" onchange="onDatasetSelect(this.value)"></select>
+    <button onclick="createDataset()" title="Start a fresh, empty dataset — your other datasets are untouched">+ New</button>
+  </div>
+  <span class="nav"><a href="/">&larr; Face Library</a> &nbsp;&middot;&nbsp; <a href="/watch">Watch webcam &rarr;</a></span>
 </header>
 <div id="steps">
   <span class="step-chip" id="chip-1">1. Enter video</span>
@@ -89,6 +96,10 @@
         <div>
           <label>Familiarity threshold (optional)</label>
           <input id="scan-threshold" type="number" step="0.01" min="0" max="1" placeholder="default">
+        </div>
+        <div>
+          <label>Sample interval, seconds (optional)</label>
+          <input id="scan-interval" type="number" step="0.1" min="0.1" placeholder="default" title="Lower for short clips (e.g. 0.25-0.5)">
         </div>
         <button class="primary" id="scan-btn" onclick="startScan()">Analyze video</button>
       </div>
@@ -159,6 +170,7 @@ async function startScan() {
   const source = document.getElementById('scan-source').value.trim();
   if (!source) return;
   const threshold = document.getElementById('scan-threshold').value;
+  const interval = document.getElementById('scan-interval').value;
   enteredStep3 = false;
   renderedDetectionCount = 0;
   report = null;
@@ -171,6 +183,7 @@ async function startScan() {
 
   const body = { source };
   if (threshold) body.threshold = parseFloat(threshold);
+  if (interval) body.interval = parseFloat(interval);
   const res = await fetch('/api/score', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
   const { job_id } = await res.json();
 
@@ -381,8 +394,37 @@ async function confirmCard(uuid) {
   await loadPeople();
 }
 
+async function loadDatasets() {
+  const { current, available } = await (await fetch('/api/datasets')).json();
+  const select = document.getElementById('dataset-select');
+  select.innerHTML = available.map(name =>
+    `<option value="${esc(name)}" ${name === current ? 'selected' : ''}>${esc(name)}</option>`
+  ).join('');
+}
+
+// Switching mid-scan would leave a report on screen referencing the OLD
+// dataset's people/thumbnails, so this always resets back to step 1.
+async function switchToDataset(name) {
+  await fetch('/api/datasets', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name }) });
+  await loadDatasets();
+  report = null;
+  goToStep(1);
+  await loadPeople();
+}
+
+async function onDatasetSelect(name) {
+  await switchToDataset(name);
+}
+
+async function createDataset() {
+  const name = prompt('Name for the new dataset (e.g. "Employee Familiarity"):');
+  if (!name || !name.trim()) return;
+  await switchToDataset(name.trim());
+}
+
 (async function init() {
   goToStep(1);
+  await loadDatasets();
   await loadPeople();
   window.addEventListener('resize', resizeOverlay);
   (function loop() { drawOverlay(); requestAnimationFrame(loop); })();

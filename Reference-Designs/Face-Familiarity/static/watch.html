@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Watch Webcam</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:system-ui,sans-serif;background:#111;color:#eee;height:100vh;display:flex;flex-direction:column}
+  a{color:#3b82f6;text-decoration:none}
+  header{padding:14px 20px;background:#1a1a1a;border-bottom:1px solid #2a2a2a;display:flex;align-items:center;gap:14px;flex-shrink:0}
+  header h1{font-size:17px;font-weight:600;white-space:nowrap}
+  header .nav{margin-left:auto;font-size:13px}
+  #dataset-switcher{display:flex;align-items:center;gap:6px}
+  #dataset-switcher select{padding:6px 8px;border-radius:6px;border:1px solid #3a3a3a;background:#222;color:#eee;font-size:12px}
+  #dataset-switcher button{padding:5px 9px;font-size:12px}
+  #control-bar{display:flex;gap:10px;padding:10px 20px;background:#161616;border-bottom:1px solid #222;align-items:center;flex-shrink:0}
+  #control-bar input[type=number]{width:100px;padding:8px 10px;border-radius:8px;border:1px solid #3a3a3a;background:#222;color:#eee;font-size:13px}
+  #control-bar label{font-size:12px;color:#999}
+  button{padding:8px 14px;border-radius:8px;border:1px solid #3a3a3a;background:#252525;color:#eee;font-size:13px;cursor:pointer}
+  button:hover{background:#2e2e2e}
+  button:disabled{opacity:.5;cursor:default}
+  button.primary{background:#1d3a5f;border-color:#2563eb;color:#93c5fd}
+  button.primary:hover{background:#234a78}
+  button.danger{background:#3a1a1a;border-color:#532020;color:#f87171}
+  button.danger:hover{background:#4a2222}
+  #watch-status{font-size:12px;color:#888}
+  #auto-add-log{font-size:11px;color:#4ade80;padding:4px 20px 0;min-height:14px;line-height:1.5}
+  main{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;align-items:center;gap:14px}
+  #cam-wrap{position:relative;display:inline-block;max-width:100%;background:#000;border-radius:10px;overflow:hidden}
+  #cam{display:block;max-width:100%;max-height:70vh}
+  #overlay{position:absolute;top:0;left:0;pointer-events:none}
+  #placeholder{width:640px;height:360px;max-width:100%;display:flex;align-items:center;justify-content:center;color:#444;font-size:14px;background:#000;border-radius:10px}
+  #legend{display:flex;gap:16px;justify-content:center;font-size:12px;color:#999}
+  #legend span{display:inline-flex;align-items:center;gap:6px}
+  #legend i{width:10px;height:10px;border-radius:2px;display:inline-block}
+  #captures-panel,#identify-panel{width:100%;max-width:640px}
+  #captures-panel h3,#identify-panel h3{font-size:13px;color:#999;font-weight:500;margin-bottom:10px}
+  #captures-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;max-height:280px;overflow-y:auto;padding:2px}
+  .capture-card{background:#1a1a1a;border-radius:10px;overflow:hidden;border:1px solid #222}
+  .capture-card img{width:100%;aspect-ratio:1;object-fit:cover;display:block;background:#000}
+  .capture-card .body{padding:8px}
+  .capture-card .guess{font-size:11px;color:#93c5fd;margin-bottom:6px}
+  .capture-card select,.capture-card input[type=text]{width:100%;margin-bottom:6px;padding:6px 8px;border-radius:6px;border:1px solid #3a3a3a;background:#222;color:#eee;font-size:12px}
+  .capture-card .actions{display:flex;gap:6px}
+  .capture-card .actions button{flex:1}
+  button.small{padding:5px 9px;font-size:12px}
+  #identify-dropzone{border:2px dashed #333;border-radius:10px;padding:24px;text-align:center;color:#666;font-size:13px}
+  #identify-dropzone.drag-over{border-color:#3b82f6;background:#1a2030;color:#93c5fd}
+  #identify-wrap{position:relative;display:inline-block;max-width:100%}
+  #identify-img{display:block;max-width:100%;max-height:60vh;border-radius:10px}
+  #identify-overlay{position:absolute;top:0;left:0;pointer-events:none}
+  #identify-summary{margin-top:10px;font-size:13px;color:#ccc;text-align:center}
+</style>
+</head>
+<body>
+<header>
+  <h1>Watch Webcam</h1>
+  <div id="dataset-switcher">
+    <select id="dataset-select" onchange="onDatasetSelect(this.value)"></select>
+    <button onclick="createDataset()" title="Start a fresh, empty dataset — your other datasets are untouched">+ New</button>
+  </div>
+  <span class="nav"><a href="/" onclick="stopWatching()">&larr; Face Library</a> &nbsp;&middot;&nbsp; <a href="/review" onclick="stopWatching()">Score a video &rarr;</a></span>
+</header>
+<div id="control-bar">
+  <button class="primary" id="start-btn" onclick="startWatching()">Start watching</button>
+  <button class="danger" id="stop-btn" onclick="stopWatching()" disabled>Stop</button>
+  <label>Familiarity threshold</label>
+  <input id="watch-threshold" type="number" step="0.01" min="0" max="1" placeholder="default">
+  <span id="watch-status"></span>
+</div>
+<div id="auto-add-log"></div>
+<main>
+  <div id="cam-wrap" style="display:none">
+    <video id="cam" autoplay muted playsinline></video>
+    <canvas id="overlay"></canvas>
+  </div>
+  <div id="placeholder">Click "Start watching" to connect to your webcam.</div>
+  <div id="legend">
+    <span><i style="background:#3b82f6"></i> person</span>
+    <span><i style="background:#4ade80"></i> familiar face</span>
+    <span><i style="background:#f87171"></i> unknown face</span>
+  </div>
+  <div id="captures-panel" style="display:none">
+    <h3>Unrecognized face spotted — add to the library?</h3>
+    <div id="captures-list"></div>
+  </div>
+  <div id="identify-panel">
+    <h3>Identify a photo</h3>
+    <div id="identify-dropzone">Drop an image here to identify it against the current library</div>
+    <div id="identify-result" style="display:none">
+      <div id="identify-wrap"><img id="identify-img"><canvas id="identify-overlay"></canvas></div>
+      <div id="identify-summary"></div>
+    </div>
+  </div>
+</main>
+<script src="/eyepop.min.js"></script>
+<script>
+const EYEPOP_URL = __EYEPOP_URL__;
+// The raw API key never reaches this page — server.py:mint_eyepop_token()
+// exchanges it server-side for a short-lived bearer token, fetched fresh here.
+async function getAccessToken() {
+  const { access_token } = await (await fetch('/api/eyepop-token')).json();
+  return access_token;
+}
+const DEFAULT_THRESHOLD = __FAMILIARITY_THRESHOLD__;
+
+// Same Person -> Face -> Face Embedding chain as common.py's POP, in the JS
+// SDK's inline dict shape (`model`, not `ability`; string literals in place of
+// PopComponentType/ForwardOperatorType, which are just their JSON values) —
+// PLUS a TrackingComponent as a sibling of the face detector inside the
+// person's CropForward.targets (not nested — see
+// eyepop-wiki:tracking-component-gives-stable-trackids-across-frames). It
+// receives the same person crop, tags the PERSON object with a stable
+// trackId across frames, and otherwise doesn't touch the face branch at all.
+// This ONLY works because /watch keeps one continuous session
+// (process({source:{mediaStream}})) — tracking state lives inside the worker
+// endpoint and resets if frames are ever uploaded as separate one-off calls,
+// which is exactly how ingest.py/score.py process sampled video frames, so
+// common.py's POP deliberately does NOT get this added.
+const POP = {
+  components: [{
+    type: "inference",
+    model: "eyepop.person:latest",
+    categoryName: "person",
+    forward: {
+      operator: { type: "crop", crop: { maxItems: 128 } },
+      targets: [
+        {
+          type: "tracking",
+          maxAgeSeconds: 5.0,
+          motionModel: "constant_velocity",
+        },
+        {
+          type: "inference",
+          model: "eyepop.person.face.short-range:latest",
+          categoryName: "2d-face-points",
+          forward: {
+            operator: { type: "crop", crop: { boxPadding: 1.5, orientationTargetAngle: -90.0 } },
+            targets: [{ type: "inference", model: "eyepop.face-id.large:latest" }],
+          },
+        },
+      ],
+    },
+  }],
+};
+
+// Mirrors common.py's is_good_face_shot thresholds exactly — see CLAUDE.md for
+// how these were calibrated.
+const MIN_FACE_SIZE_PX = 80;
+const MIN_LANDMARK_CONFIDENCE = 0.65;
+
+// Per-trackId identity smoothing ("inertia"): a per-frame match on its own
+// flickers between a name and Unknown whenever the raw score hovers near
+// FAMILIARITY_THRESHOLD — expected, not a bug, since nothing before this
+// carried memory across frames. Now that each person has a stable trackId
+// (see POP above), keep a short rolling window of raw per-frame matches per
+// track and only change the DISPLAYED identity once a majority of the window
+// agrees — a single noisy frame gets outvoted instead of flipping the label.
+const TRACK_WINDOW_SIZE = 7;
+const TRACK_MIN_AGREEMENT = 0.5; // fraction of the window that must agree to switch the DISPLAYED name
+
+// A face can be "confidently unknown" by the strict live-display bar
+// (FAMILIARITY_THRESHOLD) while still consistently pointing at the same
+// known person underneath — that's the signal worth acting on automatically
+// instead of making the user click through a card every time.
+const AUTO_ADD_MIN_SCORE = 0.35;      // window-avg guess score to auto-add with NO human review
+const AUTO_ADD_MIN_AGREEMENT = 0.7;   // stricter than TRACK_MIN_AGREEMENT — auto-labeling deserves more evidence
+const SUGGEST_MIN_SCORE = 0.15;       // below this there's no real signal — leave the manual card's default as Unassigned
+
+const tracks = new Map(); // trackId -> { history: [{uuid,name,score,guessUuid,guessName,guessScore}], displayed, handled, lastSeenAt }
+
+function updateTrack(trackId, rawMatch) {
+  let track = tracks.get(trackId);
+  if (!track) {
+    track = { history: [], displayed: { uuid: null, name: 'Unknown', score: rawMatch.score }, handled: false };
+    tracks.set(trackId, track);
+  }
+  track.history.push(rawMatch);
+  if (track.history.length > TRACK_WINDOW_SIZE) track.history.shift();
+  track.lastSeenAt = Date.now();
+
+  const counts = new Map();
+  for (const r of track.history) counts.set(r.uuid, (counts.get(r.uuid) || 0) + 1);
+  let winnerUuid = track.displayed.uuid, winnerCount = counts.get(track.displayed.uuid) || 0;
+  for (const [uuid, count] of counts) {
+    if (count > winnerCount) { winnerUuid = uuid; winnerCount = count; }
+  }
+  const agreement = winnerCount / track.history.length;
+  if (agreement >= TRACK_MIN_AGREEMENT) {
+    const matching = track.history.filter(r => r.uuid === winnerUuid);
+    const avgScore = matching.reduce((s, r) => s + r.score, 0) / matching.length;
+    track.displayed = { uuid: winnerUuid, name: matching[matching.length - 1].name, score: avgScore };
+  }
+
+  // Acted-on-worthy: a FULL window has settled on "confidently unknown" (not
+  // just the first frame or two of a brand-new track, which would otherwise
+  // look identical to a real stranger). Acts at most once per continuous
+  // unknown streak — recognizing the track again (displayed.uuid !== null)
+  // re-arms it, so a later "actually still don't know them" streak on the
+  // SAME long-lived trackId gets a fresh chance instead of only ever once.
+  let captureReady = false, autoAdd = null, guess = null;
+  if (track.displayed.uuid !== null) {
+    track.handled = false;
+  } else if (!track.handled && track.history.length >= TRACK_WINDOW_SIZE && agreement >= TRACK_MIN_AGREEMENT) {
+    track.handled = true;
+
+    const guessCounts = new Map();
+    for (const r of track.history) if (r.guessUuid) guessCounts.set(r.guessUuid, (guessCounts.get(r.guessUuid) || 0) + 1);
+    let guessUuid = null, guessCount = 0;
+    for (const [uuid, count] of guessCounts) if (count > guessCount) { guessUuid = uuid; guessCount = count; }
+    const guessAgreement = guessUuid ? guessCount / track.history.length : 0;
+    const guessMatches = guessUuid ? track.history.filter(r => r.guessUuid === guessUuid) : [];
+    const guessScore = guessMatches.length ? guessMatches.reduce((s, r) => s + r.guessScore, 0) / guessMatches.length : -1;
+    guess = guessUuid ? { uuid: guessUuid, name: guessMatches[guessMatches.length - 1].guessName, score: guessScore, agreement: guessAgreement } : null;
+
+    if (guess && guess.agreement >= AUTO_ADD_MIN_AGREEMENT && guess.score >= AUTO_ADD_MIN_SCORE) {
+      autoAdd = guess;
+    } else {
+      captureReady = true; // manual card — pre-filled with `guess` if it clears SUGGEST_MIN_SCORE, else left Unassigned
+    }
+  }
+
+  console.debug('[watch] track', trackId, 'raw', rawMatch.name, rawMatch.score.toFixed(3),
+    '-> displayed', track.displayed.name, track.displayed.score.toFixed(3), `(agreement ${(agreement * 100).toFixed(0)}%)`,
+    autoAdd ? `[auto-add -> ${autoAdd.name} ${autoAdd.score.toFixed(3)}]` : captureReady ? '[capture-ready]' : '');
+  return { displayed: track.displayed, captureReady, autoAdd, guess };
+}
+
+function pruneStaleTracks() {
+  const now = Date.now();
+  for (const [id, t] of tracks) if (now - t.lastSeenAt > STALE_MS) tracks.delete(id);
+}
+
+let endpoint = null;
+let resultStream = null;
+let stream = null;
+let people = [];              // [{uuid, name, vectors: Float32Array[]}], each pre-normalized once on load
+let latestDetections = [];
+let sourceWidth = 0, sourceHeight = 0;
+let lastResultAt = 0;
+const STALE_MS = 1500;
+let drawLoopStarted = false;
+
+function esc(s) { return (s ?? '').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function normalize(vec) {
+  let sumSq = 0;
+  for (let i = 0; i < vec.length; i++) sumSq += vec[i] * vec[i];
+  const norm = Math.sqrt(sumSq);
+  if (!norm) return vec;
+  const out = new Float32Array(vec.length);
+  for (let i = 0; i < vec.length; i++) out[i] = vec[i] / norm;
+  return out;
+}
+
+async function loadPeople() {
+  const raw = await (await fetch('/api/people/embeddings')).json();
+  people = raw.map(p => ({
+    uuid: p.uuid,
+    name: p.name,
+    vectors: p.embeddings.map(e => normalize(Float32Array.from(e))),
+  }));
+}
+
+function extractEmbedding(faceObj) {
+  for (const raw of faceObj.raw || []) {
+    for (const tensor of raw.tensors || []) {
+      if (tensor.name !== 'embedding') continue;
+      const data = tensor.data;
+      return (data.length && Array.isArray(data[0])) ? data[0] : data;
+    }
+  }
+  return null;
+}
+
+function eyeLandmarks(faceObj) {
+  const kps = faceObj.keyPoints || [];
+  const labels = new Set();
+  for (const kp of kps) for (const p of (kp.points || [])) labels.add(p.classLabel);
+  const hasBothEyes = labels.has('left eye') && labels.has('right eye');
+  const confidence = kps.length ? kps[0].confidence : 0;
+  return [hasBothEyes, confidence];
+}
+
+function isGoodFaceShot(face) {
+  if (!face.hasBothEyes || face.landmarkConfidence < MIN_LANDMARK_CONFIDENCE) return false;
+  const [, , w, h] = face.faceBbox;
+  return Math.min(w, h) >= MIN_FACE_SIZE_PX;
+}
+
+function extractFaces(result) {
+  const faces = [];
+  for (const person of result.objects || []) {
+    if (person.classLabel !== 'person') continue;
+    for (const obj of person.objects || []) {
+      if (obj.classLabel !== 'face') continue;
+      const embedding = extractEmbedding(obj);
+      if (!embedding) continue;
+      const [hasBothEyes, landmarkConfidence] = eyeLandmarks(obj);
+      faces.push({
+        personBbox: [person.x, person.y, person.width, person.height],
+        faceBbox: [obj.x, obj.y, obj.width, obj.height],
+        embedding: Float32Array.from(embedding),
+        confidence: obj.confidence || 0,
+        hasBothEyes, landmarkConfidence,
+        trackId: person.trackId ?? person.trackingId ?? null, // wiki: both names appear across SDK versions
+      });
+    }
+  }
+  // Drop every face in this frame if 2+ share a byte-identical embedding —
+  // same upstream-bug mitigation as common.py:extract_faces (see CLAUDE.md).
+  if (faces.length < 2) return faces;
+  const keys = faces.map(f => f.embedding.join(','));
+  const dupes = new Set(keys.filter((k, i) => keys.indexOf(k) !== i));
+  if (!dupes.size) return faces;
+  return faces.filter((f, i) => !dupes.has(keys[i]));
+}
+
+// Nearest person regardless of threshold — "Unknown" is a live-display
+// decision (matchPerson, below), not a statement that there's zero signal.
+// Even a below-threshold nearest match is useful evidence for the
+// auto-add/suggested-name logic in updateTrack/queueCapture.
+function bestMatch(embedding) {
+  const query = normalize(embedding);
+  let bestUuid = null, bestName = null, bestScore = -1;
+  for (const person of people) {
+    for (const vec of person.vectors) {
+      let score = 0;
+      for (let i = 0; i < query.length; i++) score += query[i] * vec[i];
+      if (score > bestScore) { bestScore = score; bestUuid = person.uuid; bestName = person.name; }
+    }
+  }
+  return { uuid: bestUuid, name: bestName, score: bestScore };
+}
+
+function matchPerson(embedding, threshold) {
+  const best = bestMatch(embedding);
+  if (best.uuid === null || best.score < threshold) return { uuid: null, name: 'Unknown', score: best.score };
+  return best;
+}
+
+// Live-path version: carries the raw best-guess alongside the thresholded
+// display decision, so a per-frame history entry has both without a second
+// pass over `people` later.
+function matchAndGuess(embedding, threshold) {
+  const best = bestMatch(embedding);
+  const display = (best.uuid === null || best.score < threshold)
+    ? { uuid: null, name: 'Unknown', score: best.score }
+    : { uuid: best.uuid, name: best.name, score: best.score };
+  return { ...display, guessUuid: best.uuid, guessName: best.name, guessScore: best.score };
+}
+
+function thresholdValue() {
+  const raw = document.getElementById('watch-threshold').value;
+  return raw ? parseFloat(raw) : DEFAULT_THRESHOLD;
+}
+
+function resizeOverlay() {
+  const cam = document.getElementById('cam');
+  const canvas = document.getElementById('overlay');
+  canvas.width = cam.clientWidth;
+  canvas.height = cam.clientHeight;
+  canvas.style.width = cam.clientWidth + 'px';
+  canvas.style.height = cam.clientHeight + 'px';
+}
+
+function drawDetections(ctx, detections, scaleX, scaleY) {
+  for (const d of detections) {
+    const [px, py, pw, ph] = d.personBbox;
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#3b82f6';
+    ctx.strokeRect(px * scaleX, py * scaleY, pw * scaleX, ph * scaleY);
+
+    const [fx, fy, fw, fh] = d.faceBbox;
+    const color = d.familiar ? '#4ade80' : '#f87171';
+    ctx.strokeStyle = color;
+    ctx.strokeRect(fx * scaleX, fy * scaleY, fw * scaleX, fh * scaleY);
+
+    const label = d.familiar ? `${d.name} ${(d.score * 100).toFixed(0)}%` : 'Unknown';
+    ctx.font = '13px system-ui';
+    const textW = ctx.measureText(label).width;
+    const lx = fx * scaleX, ly = Math.max(0, fy * scaleY - 18);
+    ctx.fillStyle = color;
+    ctx.fillRect(lx, ly, textW + 8, 18);
+    ctx.fillStyle = '#111';
+    ctx.fillText(label, lx + 4, ly + 13);
+  }
+}
+
+function drawOverlay() {
+  const canvas = document.getElementById('overlay');
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!sourceWidth || Date.now() - lastResultAt > STALE_MS) return;
+  drawDetections(ctx, latestDetections, canvas.width / sourceWidth, canvas.height / sourceHeight);
+}
+
+function startDrawLoop() {
+  if (drawLoopStarted) return;
+  drawLoopStarted = true;
+  (function loop() {
+    resizeOverlay();
+    drawOverlay();
+    if (stream) requestAnimationFrame(loop);
+    else drawLoopStarted = false;
+  })();
+}
+
+let pendingCaptures = [];
+const MAX_PENDING_CAPTURES = 8; // hard cap so a burst of genuinely-unknown faces can't pile up and crowd out the video
+
+function personOptions(selectedUuid) {
+  return '<option value="">Unassigned</option>' + people.map(p =>
+    `<option value="${esc(p.uuid)}" ${p.uuid === selectedUuid ? 'selected' : ''}>${esc(p.name)}</option>`
+  ).join('');
+}
+
+function renderCaptures() {
+  const panel = document.getElementById('captures-panel');
+  panel.style.display = pendingCaptures.length ? '' : 'none';
+  document.getElementById('captures-list').innerHTML = pendingCaptures.map(c => `
+    <div class="capture-card">
+      <img src="${c.thumbnailDataUrl}">
+      <div class="body">
+        <div class="guess">${c.guessName ? `Best guess: ${esc(c.guessName)} (${(c.guessScore * 100).toFixed(0)}%)` : 'No close match'}</div>
+        <select id="sel-${c.id}">${personOptions(c.guessScore >= SUGGEST_MIN_SCORE ? c.guessUuid : null)}</select>
+        <input type="text" id="new-${c.id}" placeholder="...or type a new person's name">
+        <div class="actions">
+          <button class="small primary" onclick="addCapture('${c.id}')">Add to library</button>
+          <button class="small" onclick="dismissCapture('${c.id}')">Dismiss</button>
+        </div>
+      </div>
+    </div>`).join('');
+}
+
+// Grabs the CURRENT video frame (not a stored one — the frame this detection
+// came from is already gone by the time anything happens with it, human
+// click or auto-add) and crops it to the face bbox, same idea as
+// common.py:crop_jpeg but client-side. Returns a data: URL, or null if the
+// video isn't ready yet.
+function cropCurrentFrame(faceBbox) {
+  const cam = document.getElementById('cam');
+  if (!cam.videoWidth || !sourceWidth) return null;
+  const full = document.createElement('canvas');
+  full.width = sourceWidth;
+  full.height = sourceHeight;
+  full.getContext('2d').drawImage(cam, 0, 0, sourceWidth, sourceHeight);
+
+  const [fx, fy, fw, fh] = faceBbox;
+  const thumb = document.createElement('canvas');
+  thumb.width = Math.max(1, Math.round(fw));
+  thumb.height = Math.max(1, Math.round(fh));
+  thumb.getContext('2d').drawImage(full, fx, fy, fw, fh, 0, 0, thumb.width, thumb.height);
+  return thumb.toDataURL('image/jpeg', 0.92);
+}
+
+function cosineSim(a, b) {
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < a.length; i++) { dot += a[i] * b[i]; na += a[i] * a[i]; nb += b[i] * b[i]; }
+  const denom = Math.sqrt(na) * Math.sqrt(nb);
+  return denom ? dot / denom : 0;
+}
+
+function queueCapture(f, guess) {
+  const embArr = Array.from(f.embedding);
+  // Same physical unresolved face is likely still in frame from a moment
+  // ago (e.g. its track briefly reset) — don't pile up near-duplicate cards.
+  if (pendingCaptures.some(c => cosineSim(c.embedding, embArr) > 0.9)) return;
+
+  const thumbnailDataUrl = cropCurrentFrame(f.faceBbox);
+  if (!thumbnailDataUrl) return;
+
+  if (pendingCaptures.length >= MAX_PENDING_CAPTURES) pendingCaptures.shift();
+  pendingCaptures.push({
+    id: `cap-${pendingCaptures.length}-${tracks.size}-${Date.now()}`,
+    thumbnailDataUrl, embedding: embArr, confidence: f.confidence,
+    guessUuid: guess ? guess.uuid : null, guessName: guess ? guess.name : null, guessScore: guess ? guess.score : -1,
+  });
+  renderCaptures();
+}
+
+let autoAddLog = [];
+
+function logAutoAdd(name, score) {
+  autoAddLog.unshift(`Auto-added to ${name} (${(score * 100).toFixed(0)}%) — ${new Date().toLocaleTimeString()}`);
+  autoAddLog = autoAddLog.slice(0, 5);
+  document.getElementById('auto-add-log').innerHTML = autoAddLog.map(esc).join('<br>');
+}
+
+async function autoAddFace(f, guess) {
+  const thumbnailDataUrl = cropCurrentFrame(f.faceBbox);
+  if (!thumbnailDataUrl) return;
+  await fetch('/api/faces/capture', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      thumbnail: thumbnailDataUrl.slice(thumbnailDataUrl.indexOf(',') + 1),
+      embedding: Array.from(f.embedding), confidence: f.confidence, person_uuid: guess.uuid,
+    }),
+  });
+  console.debug('[watch] auto-added face to', guess.name, guess.score.toFixed(3));
+  logAutoAdd(guess.name, guess.score);
+  await loadPeople(); // so this newly added exemplar helps future matching immediately
+}
+
+async function addCapture(id) {
+  const capture = pendingCaptures.find(c => c.id === id);
+  if (!capture) return;
+  const personUuid = document.getElementById('sel-' + id).value;
+  const newName = document.getElementById('new-' + id).value.trim();
+  const body = { thumbnail: capture.thumbnailDataUrl.slice(capture.thumbnailDataUrl.indexOf(',') + 1), embedding: capture.embedding, confidence: capture.confidence };
+  if (newName) body.new_person_name = newName;
+  else if (personUuid) body.person_uuid = personUuid;
+  await fetch('/api/faces/capture', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  pendingCaptures = pendingCaptures.filter(c => c.id !== id);
+  renderCaptures();
+  await loadPeople(); // so this face (and any new person) is recognized live from here on
+}
+
+function dismissCapture(id) {
+  pendingCaptures = pendingCaptures.filter(c => c.id !== id);
+  renderCaptures();
+}
+
+async function processResults(threshold) {
+  for await (const result of resultStream) {
+    if (!stream) break; // stopped mid-stream
+    sourceWidth = result.source_width;
+    sourceHeight = result.source_height;
+    const faces = extractFaces(result);
+    latestDetections = faces.map(f => {
+      if (!isGoodFaceShot(f)) return null;
+      const raw = matchAndGuess(f.embedding, threshold);
+      // No trackId yet (e.g. the very first frame or two, before the worker's
+      // tracker has assigned one) -> fall back to the raw per-frame match
+      // rather than smoothing against nothing, and skip auto-add/capture
+      // (no continuity to judge "confidently unknown" against yet).
+      let displayed = raw, captureReady = false, autoAdd = null, guess = null;
+      if (f.trackId != null) ({ displayed, captureReady, autoAdd, guess } = updateTrack(f.trackId, raw));
+      if (autoAdd) autoAddFace(f, autoAdd);
+      else if (captureReady) queueCapture(f, guess);
+      return {
+        personBbox: f.personBbox, faceBbox: f.faceBbox,
+        familiar: displayed.uuid !== null, name: displayed.name, score: displayed.score,
+        rawName: raw.name, rawScore: raw.score,
+      };
+    }).filter(Boolean);
+    pruneStaleTracks();
+    lastResultAt = Date.now();
+    document.getElementById('watch-status').textContent = latestDetections.length
+      ? latestDetections.map(d => `${d.name} ${(d.score * 100).toFixed(0)}% (raw ${d.rawName} ${(d.rawScore * 100).toFixed(0)}%)`).join(', ')
+      : 'Watching — no face in frame';
+  }
+}
+
+async function startWatching() {
+  const startBtn = document.getElementById('start-btn');
+  const stopBtn = document.getElementById('stop-btn');
+  const status = document.getElementById('watch-status');
+  startBtn.disabled = true;
+  status.textContent = 'Requesting webcam access...';
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+  } catch (err) {
+    status.textContent = 'Webcam access denied: ' + err.message;
+    startBtn.disabled = false;
+    return;
+  }
+  document.getElementById('cam-wrap').style.display = '';
+  document.getElementById('placeholder').style.display = 'none';
+  const cam = document.getElementById('cam');
+  cam.srcObject = stream;
+
+  await loadPeople();
+
+  status.textContent = 'Connecting to EyePop...';
+  endpoint = await EyePopSdk.EyePop.workerEndpoint({
+    accessToken: await getAccessToken(),
+    eyepopUrl: EYEPOP_URL,
+    pop: POP,
+    stopJobs: false,
+  }).connect();
+
+  resultStream = await endpoint.process({ source: { mediaStream: stream } });
+
+  status.textContent = `Watching (${people.length} person(s) in library)...`;
+  stopBtn.disabled = false;
+  startDrawLoop();
+  processResults(thresholdValue());
+}
+
+async function stopWatching() {
+  const wasStreaming = !!stream;
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  if (resultStream) { try { resultStream.cancel(); } catch (e) {} resultStream = null; }
+  if (endpoint) { try { await endpoint.disconnect(); } catch (e) {} endpoint = null; }
+  latestDetections = [];
+  tracks.clear(); // trackIds are only meaningful within one worker session (see POP's tracking note above)
+  pendingCaptures = [];
+  renderCaptures();
+  document.getElementById('cam-wrap').style.display = 'none';
+  document.getElementById('placeholder').style.display = '';
+  document.getElementById('start-btn').disabled = false;
+  document.getElementById('stop-btn').disabled = true;
+  if (wasStreaming) document.getElementById('watch-status').textContent = 'Stopped.';
+}
+
+async function loadDatasets() {
+  const { current, available } = await (await fetch('/api/datasets')).json();
+  const select = document.getElementById('dataset-select');
+  select.innerHTML = available.map(name =>
+    `<option value="${esc(name)}" ${name === current ? 'selected' : ''}>${esc(name)}</option>`
+  ).join('');
+}
+
+async function switchToDataset(name) {
+  const wasWatching = !!stream;
+  await stopWatching();
+  await fetch('/api/datasets', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name }) });
+  await loadDatasets();
+  if (wasWatching) await startWatching();
+}
+
+async function onDatasetSelect(name) {
+  await switchToDataset(name);
+}
+
+async function createDataset() {
+  const name = prompt('Name for the new dataset (e.g. "Employee Familiarity"):');
+  if (!name || !name.trim()) return;
+  await switchToDataset(name.trim());
+}
+
+// Safety net for leaving the page any way other than the nav links above
+// (browser back button, closing the tab, typing a new URL) — those already
+// call stopWatching() directly since an unawaited async call in an onclick
+// still fires its synchronous work (stream.getTracks().stop(),
+// resultStream.cancel()) immediately, before navigation proceeds. pagehide
+// fires more reliably than beforeunload across browsers (notably iOS Safari).
+window.addEventListener('pagehide', () => { stopWatching(); });
+
+function resizeIdentifyOverlay() {
+  const img = document.getElementById('identify-img');
+  const canvas = document.getElementById('identify-overlay');
+  canvas.width = img.clientWidth;
+  canvas.height = img.clientHeight;
+  canvas.style.width = img.clientWidth + 'px';
+  canvas.style.height = img.clientHeight + 'px';
+}
+
+// One-off identification of a dropped photo — a single still image processed
+// through the SAME Pop/matching logic as the live loop, just without any
+// tracking/smoothing (there's only one frame, nothing to smooth across).
+// Reuses the live `endpoint` if watching is already running rather than
+// opening a second worker session; otherwise opens (and closes) a short-lived
+// one just for this identification.
+async function identifyPhoto(file) {
+  const summary = document.getElementById('identify-summary');
+  document.getElementById('identify-result').style.display = '';
+  summary.textContent = 'Identifying...';
+
+  const img = document.getElementById('identify-img');
+  const dataUrl = await new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.readAsDataURL(file);
+  });
+  img.src = dataUrl;
+  await new Promise((resolve) => { img.onload = resolve; });
+
+  if (!people.length) await loadPeople();
+
+  let localEndpoint = endpoint;
+  let ownConnection = false;
+  try {
+    if (!localEndpoint) {
+      localEndpoint = await EyePopSdk.EyePop.workerEndpoint({
+        accessToken: await getAccessToken(), eyepopUrl: EYEPOP_URL, pop: POP, stopJobs: false,
+      }).connect();
+      ownConnection = true;
+    }
+    const photoStream = await localEndpoint.process({ source: { file } });
+    let result = null;
+    for await (const r of photoStream) { result = r; break; } // one still image -> one result
+
+    if (!result) { summary.textContent = 'No result from EyePop.'; return; }
+
+    const detections = extractFaces(result).map(f => {
+      if (!isGoodFaceShot(f)) return null;
+      const match = matchPerson(f.embedding, thresholdValue());
+      return { personBbox: f.personBbox, faceBbox: f.faceBbox, familiar: match.uuid !== null, name: match.name, score: match.score };
+    }).filter(Boolean);
+
+    resizeIdentifyOverlay();
+    const ctx = document.getElementById('identify-overlay').getContext('2d');
+    ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+    drawDetections(ctx, detections, ctx.canvas.width / result.source_width, ctx.canvas.height / result.source_height);
+
+    summary.textContent = detections.length
+      ? detections.map(d => d.familiar ? `${d.name} ${(d.score * 100).toFixed(0)}%` : 'Unknown').join(', ')
+      : 'No usable face detected in this photo.';
+  } catch (err) {
+    summary.textContent = 'Error: ' + err.message;
+  } finally {
+    if (ownConnection) { try { await localEndpoint.disconnect(); } catch (e) {} }
+  }
+}
+
+function initIdentifyDropZone() {
+  const zone = document.getElementById('identify-dropzone');
+  ['dragenter', 'dragover'].forEach(evt => zone.addEventListener(evt, (e) => {
+    e.preventDefault();
+    zone.classList.add('drag-over');
+  }));
+  ['dragleave', 'drop'].forEach(evt => zone.addEventListener(evt, (e) => {
+    e.preventDefault();
+    zone.classList.remove('drag-over');
+  }));
+  zone.addEventListener('drop', (e) => {
+    const file = Array.from(e.dataTransfer.files || []).find(f => f.type.startsWith('image/'));
+    if (file) identifyPhoto(file);
+  });
+}
+
+(async function init() {
+  initIdentifyDropZone();
+  await loadDatasets();
+})();
+</script>
+</body>
+</html>

@@ -2,17 +2,18 @@
 """
 Ingest a video into the face library.
 
-Samples the video every SAMPLE_INTERVAL_SECONDS, runs each frame through the
-Person -> Face -> Face Embedding Pop (see common.py), and stores one unlabeled
-face row (thumbnail + embedding) per detection. Faces sit unassigned until a
-human groups and names them in the label UI (see server.py / static/label.html).
+Samples the video every SAMPLE_INTERVAL_SECONDS (or --interval), runs each
+frame through the Person -> Face -> Face Embedding Pop (see common.py), and
+stores one unlabeled face row (thumbnail + embedding) per detection. Faces sit
+unassigned until a human groups and names them in the label UI (see server.py
+/ static/label.html).
 
 Every run appends per-frame timing (video-decode time vs. EyePop round-trip
 time) and a summary to logs/ingest.log, so ingest performance can be compared
 across runs (e.g. resolution or model changes) — see CLAUDE.md.
 
 Usage:
-    python3.12 ingest.py <youtube_url_or_path>
+    python3.12 ingest.py <youtube_url_or_path> [--interval 0.5]
 """
 import argparse
 import asyncio
@@ -20,8 +21,9 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+import dataset
 import db
-from common import THUMBNAIL_DIR, crop_jpeg, embedding_to_bytes, extract_faces, is_good_face_shot, resolve_video, scan_video
+from common import crop_jpeg, embedding_to_bytes, extract_faces, is_good_face_shot, resolve_video, scan_video, thumbnail_dir
 
 LOG_DIR = Path("logs")
 LOG_DIR.mkdir(exist_ok=True)
@@ -35,10 +37,13 @@ def _log(msg: str) -> None:
         f.write(line + "\n")
 
 
-async def ingest_video(source: str, progress=None) -> int:
+async def ingest_video(source: str, progress=None, interval: float | None = None) -> int:
     run_start = time.monotonic()
     video = resolve_video(source)
-    _log(f"=== ingest start: {video.name} (source={source}) ===")
+    _log(
+        f"=== ingest start: {video.name} (source={source}, dataset={dataset.get_current()}, "
+        f"interval={interval if interval is not None else 'default'}) ==="
+    )
 
     conn = db.connect()
     count = 0
@@ -51,13 +56,13 @@ async def ingest_video(source: str, progress=None) -> int:
         eyepop_times.append(eyepop_ms)
         _log(f"  frame @ {seconds:7.2f}s  grab={grab_ms:6.0f}ms  eyepop={eyepop_ms:6.0f}ms")
 
-    async for seconds, jpeg, result in scan_video(video, progress, timing):
+    async for seconds, jpeg, result in scan_video(video, progress, timing, interval=interval):
         for face in extract_faces(result):
             if not is_good_face_shot(face):
                 skipped += 1
                 continue
             thumb_name = f"{video.stem}_{seconds:.2f}s_{db.new_uuid()[:8]}.jpg"
-            (THUMBNAIL_DIR / thumb_name).write_bytes(crop_jpeg(jpeg, face["face_bbox"]))
+            (thumbnail_dir() / thumb_name).write_bytes(crop_jpeg(jpeg, face["face_bbox"]))
             db.insert_face(
                 conn,
                 source=video.name,
@@ -86,8 +91,11 @@ async def ingest_video(source: str, progress=None) -> int:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("source", help="YouTube URL or local video path")
+    parser.add_argument("--interval", type=float, default=None,
+                         help="seconds between sampled frames (default: SAMPLE_INTERVAL_SECONDS, "
+                              "usually 2 — use a smaller value like 0.25-0.5 for short clips)")
     args = parser.parse_args()
     ingested = asyncio.run(
-        ingest_video(args.source, progress=lambda i, n: print(f"  frame {i}/{n}", end="\r"))
+        ingest_video(args.source, progress=lambda i, n: print(f"  frame {i}/{n}", end="\r"), interval=args.interval)
     )
     print(f"\nIngested {ingested} face(s) into the library. Open the label UI to group and name them.")
