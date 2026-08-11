@@ -1,0 +1,10 @@
+.env
+__pycache__/
+cache/
+downloads/
+uploads/
+logs/
+.DS_Store
+
+# Per-dataset storage (library.db, thumbnails, reports per data/<dataset>/ — see dataset.py).
+data/

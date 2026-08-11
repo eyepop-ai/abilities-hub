@@ -1,0 +1,9 @@
+# Pinned below 4.x on purpose: the browser-side JS SDK's 1.x->3.x jump broke
+# auth (secretKey/liveIngress removed) and this Python package tends to move
+# in step. Bump the cap deliberately, re-verify /watch, and update
+# static/eyepop.min.js to match (see README's "Updating the JS SDK bundle").
+eyepop>=3.17.0,<4
+python-dotenv>=1.0.1
+opencv-python>=4.10.0
+numpy>=1.26.4
+yt-dlp>=2026.7.4

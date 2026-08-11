@@ -1,0 +1,434 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Score a Video</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:system-ui,sans-serif;background:#111;color:#eee;height:100vh;display:flex;flex-direction:column}
+  a{color:#3b82f6;text-decoration:none}
+  header{padding:14px 20px;background:#1a1a1a;border-bottom:1px solid #2a2a2a;display:flex;align-items:center;gap:14px;flex-shrink:0}
+  header h1{font-size:17px;font-weight:600;white-space:nowrap}
+  header .nav{margin-left:auto;font-size:13px}
+  #dataset-switcher{display:flex;align-items:center;gap:6px}
+  #dataset-switcher select{padding:6px 8px;border-radius:6px;border:1px solid #3a3a3a;background:#222;color:#eee;font-size:12px}
+  #dataset-switcher button{padding:5px 9px;font-size:12px}
+  #steps{display:flex;gap:6px;padding:10px 20px;background:#161616;border-bottom:1px solid #222;flex-shrink:0}
+  .step-chip{font-size:12px;color:#666;padding:4px 10px;border-radius:99px;background:#1c1c1c;border:1px solid #2a2a2a}
+  .step-chip.active{color:#93c5fd;background:#1d3a5f;border-color:#2563eb}
+  .step-chip.done{color:#4ade80}
+  main{flex:1;overflow-y:auto;padding:20px}
+  .step{display:none;max-width:1000px;margin:0 auto}
+  .step.active{display:block}
+  button{padding:8px 14px;border-radius:8px;border:1px solid #3a3a3a;background:#252525;color:#eee;font-size:13px;cursor:pointer}
+  button:hover{background:#2e2e2e}
+  button:disabled{opacity:.5;cursor:default}
+  button.primary{background:#1d3a5f;border-color:#2563eb;color:#93c5fd}
+  button.primary:hover{background:#234a78}
+  button.small{padding:5px 9px;font-size:12px}
+
+  /* Step 1 */
+  #scan-form{display:flex;flex-direction:column;gap:10px;background:#161616;border:1px solid #262626;border-radius:12px;padding:24px}
+  #scan-form label{font-size:12px;color:#999}
+  #scan-form input[type=text]{padding:10px 12px;border-radius:8px;border:1px solid #3a3a3a;background:#222;color:#eee;font-size:14px;outline:none}
+  #scan-form input[type=text]:focus{border-color:#555}
+  #scan-form .row{display:flex;gap:10px;align-items:flex-end}
+  #scan-form input[type=number]{width:100px;padding:10px 10px;border-radius:8px;border:1px solid #3a3a3a;background:#222;color:#eee;font-size:14px}
+
+  /* Step 2 */
+  #progress-panel{background:#161616;border:1px solid #262626;border-radius:12px;padding:28px;text-align:center}
+  #progress-panel h2{font-size:15px;margin-bottom:18px;color:#ddd}
+  .progress-track{height:10px;border-radius:99px;background:#242424;overflow:hidden}
+  .progress-fill{height:100%;width:0%;background:linear-gradient(90deg,#2563eb,#3b82f6);transition:width .25s ease}
+  #progress-detail{margin-top:14px;font-size:13px;color:#999}
+  #progress-stats{margin-top:6px;font-size:12px;color:#666}
+
+  /* Step 3 */
+  #player-wrap{position:relative;display:inline-block;max-width:100%;background:#000;border-radius:10px;overflow:hidden}
+  #player{display:block;max-width:100%;max-height:70vh}
+  #overlay{position:absolute;top:0;left:0;pointer-events:none}
+  #player-row{display:flex;justify-content:center}
+  #legend{display:flex;gap:16px;justify-content:center;padding:12px 0;font-size:12px;color:#999}
+  #legend span{display:inline-flex;align-items:center;gap:6px}
+  #legend i{width:10px;height:10px;border-radius:2px;display:inline-block}
+  #summary{text-align:center;font-size:13px;color:#999;margin-bottom:8px}
+  #processing-banner{display:none;text-align:center;font-size:12px;color:#93c5fd;background:#132033;border:1px solid #1d3a5f;border-radius:8px;padding:8px 14px;margin:0 auto 14px;max-width:420px}
+  #processing-banner.open{display:block}
+  #results h3{font-size:13px;color:#999;font-weight:500;margin:22px 0 12px}
+  #grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:14px}
+  .card{background:#1a1a1a;border-radius:10px;overflow:hidden;border:1px solid #222}
+  .card img{width:100%;aspect-ratio:1;object-fit:cover;display:block;background:#000}
+  .card .body{padding:10px}
+  .card .row1{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+  .card .ts{font-size:11px;color:#777}
+  .badge{font-size:11px;padding:3px 8px;border-radius:99px;white-space:nowrap}
+  .badge.known{background:#0f3a1f;color:#4ade80;border:1px solid #16532b}
+  .badge.unknown{background:#3a1a1a;color:#f87171;border:1px solid #532020}
+  .card select,.card input[type=text]{width:100%;margin-top:6px;padding:6px 8px;border-radius:6px;border:1px solid #3a3a3a;background:#222;color:#eee;font-size:12px}
+  .card .actions{display:flex;gap:6px;margin-top:8px}
+  .card .actions button{flex:1}
+  .card.confirmed{opacity:.55}
+  .card .confirmed-tag{font-size:12px;color:#4ade80;text-align:center;padding-top:6px}
+  .empty{padding:40px 20px;text-align:center;color:#444;font-size:14px;grid-column:1/-1}
+  #new-scan-row{text-align:center;margin-top:24px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Score a Video</h1>
+  <div id="dataset-switcher">
+    <select id="dataset-select" onchange="onDatasetSelect(this.value)"></select>
+    <button onclick="createDataset()" title="Start a fresh, empty dataset — your other datasets are untouched">+ New</button>
+  </div>
+  <span class="nav"><a href="/">&larr; Face Library</a> &nbsp;&middot;&nbsp; <a href="/watch">Watch webcam &rarr;</a></span>
+</header>
+<div id="steps">
+  <span class="step-chip" id="chip-1">1. Enter video</span>
+  <span class="step-chip" id="chip-2">2. Analyze</span>
+  <span class="step-chip" id="chip-3">3. Review</span>
+</div>
+<main>
+  <div class="step" id="step-1">
+    <div id="scan-form">
+      <label>YouTube URL or local video path</label>
+      <input id="scan-source" type="text" placeholder="https://www.youtube.com/watch?v=...">
+      <div class="row">
+        <div>
+          <label>Familiarity threshold (optional)</label>
+          <input id="scan-threshold" type="number" step="0.01" min="0" max="1" placeholder="default">
+        </div>
+        <div>
+          <label>Sample interval, seconds (optional)</label>
+          <input id="scan-interval" type="number" step="0.1" min="0.1" placeholder="default" title="Lower for short clips (e.g. 0.25-0.5)">
+        </div>
+        <button class="primary" id="scan-btn" onclick="startScan()">Analyze video</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="step" id="step-2">
+    <div id="progress-panel">
+      <h2 id="progress-title">Analyzing video...</h2>
+      <div class="progress-track"><div class="progress-fill" id="progress-fill"></div></div>
+      <div id="progress-detail">Starting...</div>
+      <div id="progress-stats"></div>
+    </div>
+  </div>
+
+  <div class="step" id="step-3">
+    <div id="summary"></div>
+    <div id="processing-banner"></div>
+    <div id="player-row">
+      <div id="player-wrap">
+        <video id="player" controls></video>
+        <canvas id="overlay"></canvas>
+      </div>
+    </div>
+    <div id="legend">
+      <span><i style="background:#3b82f6"></i> person</span>
+      <span><i style="background:#4ade80"></i> familiar face</span>
+      <span><i style="background:#f87171"></i> unknown face</span>
+    </div>
+    <div id="results">
+      <h3>Detected faces — confirm or correct into the library</h3>
+      <div id="grid"></div>
+    </div>
+    <div id="new-scan-row"><button onclick="goToStep(1)">Analyze another video</button></div>
+  </div>
+</main>
+<script>
+let people = [];
+let report = null;
+let detectionsBySeconds = new Map();
+let sortedSeconds = [];
+let staleAfter = 1.5;
+let scanStartMs = null;
+let enteredStep3 = false;
+let renderedDetectionCount = 0;
+
+function esc(s) { return (s ?? '').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function goToStep(n) {
+  for (const i of [1, 2, 3]) {
+    document.getElementById('step-' + i).classList.toggle('active', i === n);
+    const chip = document.getElementById('chip-' + i);
+    chip.classList.toggle('active', i === n);
+    chip.classList.toggle('done', i < n);
+  }
+}
+
+async function loadPeople() {
+  people = await (await fetch('/api/people')).json();
+}
+
+function personOptions(selectedUuid) {
+  return '<option value="">Choose a person...</option>' +
+    people.map(p => `<option value="${p.uuid}" ${p.uuid === selectedUuid ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+}
+
+async function startScan() {
+  const source = document.getElementById('scan-source').value.trim();
+  if (!source) return;
+  const threshold = document.getElementById('scan-threshold').value;
+  const interval = document.getElementById('scan-interval').value;
+  enteredStep3 = false;
+  renderedDetectionCount = 0;
+  report = null;
+  goToStep(2);
+  scanStartMs = performance.now();
+  document.getElementById('progress-title').textContent = 'Analyzing video...';
+  document.getElementById('progress-fill').style.width = '0%';
+  document.getElementById('progress-detail').textContent = 'Starting...';
+  document.getElementById('progress-stats').textContent = '';
+
+  const body = { source };
+  if (threshold) body.threshold = parseFloat(threshold);
+  if (interval) body.interval = parseFloat(interval);
+  const res = await fetch('/api/score', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  const { job_id } = await res.json();
+
+  const poll = setInterval(async () => {
+    const job = await (await fetch('/api/jobs/' + job_id)).json();
+    if (job.progress) updateProgress(job.progress);
+
+    // The video file itself is fully downloaded before scanning starts, so
+    // video_path shows up in the very first partial snapshot — jump to the
+    // player as soon as it's playable instead of waiting for the whole scan.
+    // Detections/overlay/grid then fill in progressively as more arrive.
+    const data = job.status === 'done' ? job.result : job.partial;
+    if (data && data.video_path) {
+      report = data;
+      indexDetections(report);
+      if (!enteredStep3) {
+        enteredStep3 = true;
+        setupPlayer(report);
+        goToStep(3);
+      }
+      updateSummaryAndBanner(job);
+      appendNewCards(report);
+    }
+
+    if (job.status === 'done') {
+      clearInterval(poll);
+    } else if (job.status === 'error') {
+      clearInterval(poll);
+      if (!enteredStep3) {
+        document.getElementById('progress-title').textContent = 'Error';
+        document.getElementById('progress-detail').textContent = job.error;
+      } else {
+        const banner = document.getElementById('processing-banner');
+        banner.textContent = 'Error: ' + job.error;
+        banner.classList.add('open');
+      }
+    }
+  }, 1000);
+}
+
+function updateProgress(progress) {
+  const pct = progress.total ? Math.round((progress.done / progress.total) * 100) : 0;
+  document.getElementById('progress-fill').style.width = pct + '%';
+  document.getElementById('progress-detail').textContent =
+    `Frame ${progress.done} / ${progress.total} (${pct}%)`;
+  const elapsedS = (performance.now() - scanStartMs) / 1000;
+  const rate = progress.done / elapsedS;
+  const etaS = rate > 0 ? (progress.total - progress.done) / rate : null;
+  document.getElementById('progress-stats').textContent =
+    `${elapsedS.toFixed(0)}s elapsed` + (etaS !== null ? ` · ~${etaS.toFixed(0)}s remaining` : '');
+}
+
+function indexDetections(report) {
+  detectionsBySeconds = new Map();
+  for (const d of report.detections) {
+    if (!detectionsBySeconds.has(d.seconds)) detectionsBySeconds.set(d.seconds, []);
+    detectionsBySeconds.get(d.seconds).push(d);
+  }
+  sortedSeconds = Array.from(detectionsBySeconds.keys()).sort((a, b) => a - b);
+  staleAfter = 1.5;
+  for (let i = 1; i < sortedSeconds.length; i++) {
+    staleAfter = Math.min(staleAfter, (sortedSeconds[i] - sortedSeconds[i - 1]) * 0.9);
+  }
+}
+
+// Largest sampled timestamp <= t — boxes should appear exactly when detected and
+// hold until the next sample, never a moment before (binary search since
+// sortedSeconds is ascending and this runs every animation frame).
+function floorKey(t) {
+  let lo = 0, hi = sortedSeconds.length - 1, result = null;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (sortedSeconds[mid] <= t) { result = sortedSeconds[mid]; lo = mid + 1; }
+    else hi = mid - 1;
+  }
+  return result;
+}
+
+// One-time: called the moment video_path first becomes available. Must not
+// re-run on later polls or it would reset playback position/reload the video.
+function setupPlayer(report) {
+  const player = document.getElementById('player');
+  player.src = '/video/' + encodeURIComponent(report.video_path);
+  player.load();
+  player.addEventListener('loadedmetadata', resizeOverlay, { once: true });
+  document.getElementById('grid').innerHTML = '<div class="empty">Scanning — faces will appear here as they\'re found.</div>';
+}
+
+// Safe to call on every poll tick: text-only, no user-editable state to lose.
+function updateSummaryAndBanner(job) {
+  const summary = document.getElementById('summary');
+  const dets = report.detections;
+  const known = dets.filter(d => d.familiar).length;
+  summary.textContent = dets.length
+    ? `${report.video} — ${dets.length} face(s) detected so far, ${known} familiar, ${dets.length - known} unknown (threshold ${report.threshold}).`
+    : `${report.video} — no faces detected yet.`;
+
+  const banner = document.getElementById('processing-banner');
+  if (job.status === 'running') {
+    const p = job.progress;
+    banner.textContent = p
+      ? `Still analyzing — frame ${p.done}/${p.total} (${Math.round(p.done / p.total * 100)}%). Keep watching — new faces appear as they're found.`
+      : 'Starting analysis...';
+    banner.classList.add('open');
+  } else {
+    banner.classList.remove('open');
+  }
+}
+
+// Appends only NEW cards since the last call — a full re-render would wipe out
+// any in-progress "new person name" text the user is mid-typing in an existing
+// card, since detections only grow (score.py's list is append-only) this is
+// always correct: everything before renderedDetectionCount is already on screen.
+function appendNewCards(report) {
+  const dets = report.detections;
+  if (dets.length <= renderedDetectionCount) return;
+  const grid = document.getElementById('grid');
+  if (renderedDetectionCount === 0) grid.innerHTML = '';
+  const newCards = dets.slice(renderedDetectionCount).map(d => renderCard(d)).join('');
+  grid.insertAdjacentHTML('beforeend', newCards);
+  renderedDetectionCount = dets.length;
+}
+
+function resizeOverlay() {
+  const player = document.getElementById('player');
+  const canvas = document.getElementById('overlay');
+  canvas.width = player.clientWidth;
+  canvas.height = player.clientHeight;
+  canvas.style.width = player.clientWidth + 'px';
+  canvas.style.height = player.clientHeight + 'px';
+}
+
+function drawOverlay() {
+  const player = document.getElementById('player');
+  const canvas = document.getElementById('overlay');
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!report || !report.source_width || !detectionsBySeconds.size) return;
+
+  const bestKey = floorKey(player.currentTime);
+  if (bestKey === null || player.currentTime - bestKey > staleAfter) return;
+
+  const scaleX = canvas.width / report.source_width;
+  const scaleY = canvas.height / report.source_height;
+  for (const d of detectionsBySeconds.get(bestKey)) {
+    const [px, py, pw, ph] = d.person_bbox;
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#3b82f6';
+    ctx.strokeRect(px * scaleX, py * scaleY, pw * scaleX, ph * scaleY);
+
+    const [fx, fy, fw, fh] = d.face_bbox;
+    const color = d.familiar ? '#4ade80' : '#f87171';
+    ctx.strokeStyle = color;
+    ctx.strokeRect(fx * scaleX, fy * scaleY, fw * scaleX, fh * scaleY);
+
+    const label = d.familiar ? `${d.matched_name} ${(d.similarity * 100).toFixed(0)}%` : 'Unknown';
+    ctx.font = '13px system-ui';
+    const textW = ctx.measureText(label).width;
+    const lx = fx * scaleX, ly = Math.max(0, fy * scaleY - 18);
+    ctx.fillStyle = color;
+    ctx.fillRect(lx, ly, textW + 8, 18);
+    ctx.fillStyle = '#111';
+    ctx.fillText(label, lx + 4, ly + 13);
+  }
+}
+
+function renderCard(d) {
+  const badge = d.familiar
+    ? `<span class="badge known">${esc(d.matched_name)} · ${(d.similarity*100).toFixed(0)}%</span>`
+    : `<span class="badge unknown">Unknown · ${(d.similarity*100).toFixed(0)}%</span>`;
+  return `
+    <div class="card" data-uuid="${d.uuid}">
+      <img src="/thumbnail/${encodeURIComponent(d.thumbnail)}">
+      <div class="body">
+        <div class="row1"><span class="ts">${d.seconds}s</span>${badge}</div>
+        <select onchange="onPersonPick('${d.uuid}')" id="sel-${d.uuid}">${personOptions(d.matched_person_uuid)}</select>
+        <input type="text" id="new-${d.uuid}" placeholder="...or type a new person's name">
+        <div class="actions">
+          <button class="small" onclick="seekTo(${d.seconds})">Jump to ${d.seconds}s</button>
+          <button class="small primary" onclick="confirmCard('${d.uuid}')">Add to library</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function seekTo(seconds) {
+  const player = document.getElementById('player');
+  player.currentTime = seconds;
+  player.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function onPersonPick(uuid) {
+  const newInput = document.getElementById('new-' + uuid);
+  if (document.getElementById('sel-' + uuid).value) newInput.value = '';
+}
+
+async function confirmCard(uuid) {
+  const detection = report.detections.find(d => d.uuid === uuid);
+  const personUuid = document.getElementById('sel-' + uuid).value;
+  const newName = document.getElementById('new-' + uuid).value.trim();
+  if (!personUuid && !newName) return;
+  const card = document.querySelector(`.card[data-uuid="${uuid}"]`);
+  const body = { detection, video: report.video };
+  if (newName) body.new_person_name = newName; else body.person_uuid = personUuid;
+  await fetch('/api/score/confirm', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  card.classList.add('confirmed');
+  card.querySelector('.actions').innerHTML = '<div class="confirmed-tag">&check; added to library</div>';
+  await loadPeople();
+}
+
+async function loadDatasets() {
+  const { current, available } = await (await fetch('/api/datasets')).json();
+  const select = document.getElementById('dataset-select');
+  select.innerHTML = available.map(name =>
+    `<option value="${esc(name)}" ${name === current ? 'selected' : ''}>${esc(name)}</option>`
+  ).join('');
+}
+
+// Switching mid-scan would leave a report on screen referencing the OLD
+// dataset's people/thumbnails, so this always resets back to step 1.
+async function switchToDataset(name) {
+  await fetch('/api/datasets', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name }) });
+  await loadDatasets();
+  report = null;
+  goToStep(1);
+  await loadPeople();
+}
+
+async function onDatasetSelect(name) {
+  await switchToDataset(name);
+}
+
+async function createDataset() {
+  const name = prompt('Name for the new dataset (e.g. "Employee Familiarity"):');
+  if (!name || !name.trim()) return;
+  await switchToDataset(name.trim());
+}
+
+(async function init() {
+  goToStep(1);
+  await loadDatasets();
+  await loadPeople();
+  window.addEventListener('resize', resizeOverlay);
+  (function loop() { drawOverlay(); requestAnimationFrame(loop); })();
+})();
+</script>
+</body>
+</html>
