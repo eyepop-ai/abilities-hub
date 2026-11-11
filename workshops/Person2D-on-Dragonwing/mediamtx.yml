@@ -1,0 +1,8 @@
+# Minimal permissive config for demo1b_publish_webcam.sh's local RTSP server.
+# mediamtx looks for this file in its current directory first; without it,
+# it falls back to a truly empty in-memory config that refuses to create any
+# path at all (confirmed: publishing to rtsp://localhost:8554/stream failed
+# with "path 'stream' is not configured"). `all_others` auto-creates any
+# path on first publish, which is all this demo needs.
+paths:
+  all_others:

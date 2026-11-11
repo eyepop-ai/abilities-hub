@@ -1,0 +1,243 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>EyePop — Live Camera (RTSP)</title>
+<style>
+  :root{
+    --ink:#0B1226; --panel:#131C36; --line:#2A3860;
+    --mist:#A6B8DE; --paper:#EEF2FC; --signal:#FF7A29; --verified:#52D6B3;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--ink); color:var(--paper);
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;
+    min-height:100vh; display:flex; flex-direction:column; align-items:center;
+    padding:24px;
+  }
+  h1{font-size:16px; font-weight:600; letter-spacing:.02em; margin:0 0 4px;}
+  .sub{font-size:13px; color:var(--mist); margin:0 0 18px; max-width:60ch; text-align:center;}
+  .stage{
+    position:relative; width:960px; max-width:100%; border-radius:8px;
+    overflow:hidden; border:1px solid var(--line); background:#000;
+  }
+  video, canvas{display:block; width:100%; height:auto;}
+  canvas{position:absolute; top:0; left:0;}
+  .stats{
+    display:flex; gap:20px; margin-top:16px; font-variant-numeric:tabular-nums;
+  }
+  .stat{background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:10px 16px; min-width:110px;}
+  .stat .label{font-size:11px; color:var(--mist); text-transform:uppercase; letter-spacing:.05em;}
+  .stat .value{font-size:20px; font-weight:600; margin-top:2px;}
+  .status{margin-top:14px; font-size:13px; color:var(--mist);}
+  .status.err{color:#ff6b6b;}
+  .status.ok{color:var(--verified);}
+</style>
+</head>
+<body>
+  <h1>EyePop — Live Camera (RTSP)</h1>
+  <p class="sub">Local camera preview, overlaid with live predictions from the Dragonwing device, which is pulling this computer's
+  webcam over RTSP (via <code>demo1b_set_rtsp_source.py</code>) and pushing results back over a websocket.</p>
+
+  <div class="stage">
+    <video id="video" autoplay muted playsinline></video>
+    <canvas id="overlay"></canvas>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="label">People</div><div class="value" id="stat-people">–</div></div>
+    <div class="stat"><div class="label">Interval</div><div class="value" id="stat-latency">– ms</div></div>
+    <div class="stat"><div class="label">Rate</div><div class="value" id="stat-fps">– / s</div></div>
+  </div>
+
+  <p class="status" id="status">Requesting camera…</p>
+
+<script>
+// The device and pipeline come from the page URL, which demo1b_start.sh builds from
+// EYEPOP_DEVICE_URL and EYEPOP_PIPELINE_ID: demo1b_webcam.html?device=http://<host>:8080&pipeline=<id>
+const params = new URLSearchParams(location.search);
+const EYEPOP_URL = (params.get('device') || 'http://localhost:8080').replace(/\/$/, '');
+const PIPELINE_ID = params.get('pipeline') || '';
+const PIPELINE_BASE = `${EYEPOP_URL}/pipelines/${PIPELINE_ID}`;
+
+const video = document.getElementById('video');
+const overlay = document.getElementById('overlay');
+const ctx = overlay.getContext('2d');
+const statusEl = document.getElementById('status');
+const statPeople = document.getElementById('stat-people');
+const statLatency = document.getElementById('stat-latency');
+const statFps = document.getElementById('stat-fps');
+
+let inferenceCount = 0;
+let fpsWindowStart = performance.now();
+let lastMessageAt = performance.now();
+
+function setStatus(text, kind){
+  statusEl.textContent = text;
+  statusEl.className = 'status' + (kind ? ' ' + kind : '');
+}
+
+// EyePop's actual brand render style (matched from the official
+// @eyepop.ai/eyepop-render-2d package, not improvised): a translucent box
+// fill/outline plus a signature DOUBLE corner-bracket accent -- an outer
+// bracket in primary_color and a smaller inset one in secondary_color,
+// like a camera-targeting reticle -- rather than a plain stroked rectangle.
+const EYEPOP_COLORS = {
+  primary: '#2fa7d7',
+  secondary: '#94e0ff',
+  fill: 'rgba(47, 167, 215, 0.2)',
+};
+
+function cornerPoints(x, y, w, h, cornerSize, padding, insetPadding){
+  const ax = x + padding, ay = y + padding;
+  const aw = w - 2 * padding, ah = h - 2 * padding;
+  const inner = cornerSize - insetPadding;
+  return [
+    [{x: ax + insetPadding, y: ay + inner}, {x: ax + insetPadding, y: ay + insetPadding}, {x: ax + inner, y: ay + insetPadding}],
+    [{x: ax + insetPadding, y: ay + ah - inner - insetPadding}, {x: ax + insetPadding, y: ay + ah - insetPadding}, {x: ax + inner, y: ay + ah - insetPadding}],
+    [{x: ax + aw - inner - insetPadding, y: ay + insetPadding}, {x: ax + aw - insetPadding, y: ay + insetPadding}, {x: ax + aw - insetPadding, y: ay + inner}],
+    [{x: ax + aw - inner - insetPadding, y: ay + ah - insetPadding}, {x: ax + aw - insetPadding, y: ay + ah - insetPadding}, {x: ax + aw - insetPadding, y: ay + ah - inner - insetPadding}],
+  ];
+}
+
+function strokeCorners(corners, color, lineWidth){
+  for (const corner of corners){
+    ctx.beginPath();
+    ctx.moveTo(corner[0].x, corner[0].y);
+    ctx.lineTo(corner[1].x, corner[1].y);
+    ctx.lineTo(corner[2].x, corner[2].y);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lineWidth;
+    ctx.stroke();
+  }
+}
+
+function drawEyePopBox(x, y, w, h, label){
+  const dim = Math.min(w, h);
+  const lineWidth = Math.max(dim * 0.0025, 1.5);
+
+  ctx.beginPath();
+  ctx.rect(x, y, w, h);
+  ctx.lineWidth = lineWidth;
+  ctx.strokeStyle = EYEPOP_COLORS.fill;
+  ctx.fillStyle = EYEPOP_COLORS.fill;
+  ctx.fill();
+  ctx.stroke();
+
+  let cornerSize = Math.min(Math.max(dim * 0.3, 20), w - 4 * lineWidth, h - 4 * lineWidth);
+  strokeCorners(cornerPoints(x, y, w, h, cornerSize, 1, 1), EYEPOP_COLORS.primary, lineWidth);
+
+  const padding = Math.max(dim * 0.04, 4);
+  cornerSize = Math.min(cornerSize - padding * 1.33, w, h);
+  strokeCorners(cornerPoints(x, y, w, h, cornerSize, padding, padding / 2), EYEPOP_COLORS.secondary, lineWidth);
+
+  if (label){
+    const fontSize = Math.max(12, Math.min(0.08 * dim, 22));
+    ctx.font = `${fontSize}px "Times New Roman", serif`;
+    ctx.fillStyle = '#ffffff';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText(label, x + padding * 1.5, y + padding * 1.5);
+  }
+}
+
+function drawResult(result){
+  ctx.clearRect(0, 0, overlay.width, overlay.height);
+  const objects = (result && result.objects) || [];
+  statPeople.textContent = objects.length;
+
+  for (const obj of objects){
+    // Predictions come from the RTSP feed's native resolution, which may
+    // differ from this <video>'s rendered size, so scale into overlay space.
+    const sx = overlay.width / (result.source_width || overlay.width);
+    const sy = overlay.height / (result.source_height || overlay.height);
+    const x = obj.x * sx, y = obj.y * sy, w = obj.width * sx, h = obj.height * sy;
+
+    const label = obj.classLabel
+      ? obj.classLabel.charAt(0).toUpperCase() + obj.classLabel.slice(1)
+      : '';
+    drawEyePopBox(x, y, w, h, label);
+
+    for (const kp of (obj.keyPoints || [])){
+      for (const pt of (kp.points || [])){
+        const radius = Math.max(2, Math.min(4, Math.max(w, h) / 100));
+        ctx.beginPath();
+        ctx.arc(pt.x * sx, pt.y * sy, radius, 0, Math.PI * 2);
+        ctx.fillStyle = EYEPOP_COLORS.primary;
+        ctx.fill();
+        ctx.strokeStyle = EYEPOP_COLORS.secondary;
+        ctx.stroke();
+      }
+    }
+  }
+}
+
+// The device is configured (separately, via demo1b_set_rtsp_source.py) to pull
+// this computer's webcam over RTSP -- a plain outbound connection the device
+// makes to us, so it needs no NAT/ICE traversal (unlike WebRTC/WHIP, whose
+// ICE candidate on this device advertises an unreachable Docker-internal
+// IP). Results for that continuous feed arrive here over a websocket, which
+// unlike a streaming fetch body has no HTTP/2 requirement and works
+// everywhere. This page's own camera access is just a local preview, running
+// independently of the RTSP publish -- it does not feed the pipeline itself.
+async function connectPredictions(){
+  const tokenResp = await fetch(`${PIPELINE_BASE}/predictions/token`);
+  if (!tokenResp.ok){
+    throw new Error(`token fetch failed: HTTP ${tokenResp.status}`);
+  }
+  const {token} = await tokenResp.json();
+
+  const ws = new WebSocket(`${EYEPOP_URL.replace(/^http/, 'ws')}/ws/predictions/${token}`);
+
+  ws.onopen = () => setStatus('Live', 'ok');
+
+  ws.onmessage = (event) => {
+    let result;
+    try {
+      result = JSON.parse(event.data);
+    } catch {
+      return;
+    }
+    if (result.event || result.telemetry || !('objects' in result)) return; // not a per-frame prediction
+
+    drawResult(result);
+
+    const now = performance.now();
+    statLatency.textContent = `${Math.round(now - lastMessageAt)} ms`;
+    lastMessageAt = now;
+
+    inferenceCount += 1;
+    const windowElapsed = (now - fpsWindowStart) / 1000;
+    if (windowElapsed >= 1){
+      statFps.textContent = `${(inferenceCount / windowElapsed).toFixed(1)} / s`;
+      inferenceCount = 0;
+      fpsWindowStart = now;
+    }
+  };
+
+  ws.onerror = () => setStatus('Websocket error, retrying…', 'err');
+
+  ws.onclose = () => {
+    setStatus('Disconnected, retrying…', 'err');
+    setTimeout(() => connectPredictions().catch(err => setStatus(`Error: ${err.message}`, 'err')), 2000);
+  };
+}
+
+async function start(){
+  try{
+    const stream = await navigator.mediaDevices.getUserMedia({video: {width: 1280, height: 720}, audio: false});
+    video.srcObject = stream;
+    await video.play();
+    overlay.width = video.videoWidth;
+    overlay.height = video.videoHeight;
+    setStatus('Camera ready, connecting to predictions…', 'ok');
+  } catch (err){
+    setStatus(`Camera error: ${err.message} (overlay will still work without local preview)`, 'err');
+  }
+  connectPredictions().catch(err => setStatus(`Error: ${err.message}`, 'err'));
+}
+
+start();
+</script>
+</body>
+</html>

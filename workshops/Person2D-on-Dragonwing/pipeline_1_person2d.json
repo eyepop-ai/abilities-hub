@@ -1,0 +1,37 @@
+{
+  "components": [
+    {
+      "type": "inference",
+      "ability": "eyepop.person:latest",
+      "inferenceTypes": [
+        "object_detection"
+      ],
+      "confidenceThreshold": 0.9,
+      "forward": {
+        "targets": [
+          {
+            "type": "tracking",
+            "reidAbility": "eyepop.person.reid:latest",
+            "maxAgeSeconds": 2,
+            "motionModel": "random_walk",
+            "agnostic": false,
+            "classHysteresis": false
+          },
+          {
+            "type": "inference",
+            "ability": "eyepop.person.2d-body-points:latest",
+            "inferenceTypes": [
+              "key_points"
+            ],
+            "categoryName": "Person 2D Body Points",
+            "confidenceThreshold": 0.5
+          }
+        ],
+        "operator": {
+          "type": "crop",
+          "maxItems": 4
+        }
+      }
+    }
+  ]
+}
